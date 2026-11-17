@@ -57,6 +57,22 @@ def _write(path, obj):
             time.sleep(0.05)
 
 
+KEY_INFO = LIVE / "openai_key.json"  # {"expires": "YYYY-MM-DD" | None, "t"}: the OpenAI key's last day, typed in the app
+
+
+def key_expiry():
+    """The current OpenAI key's last day as "YYYY-MM-DD", or None if nobody typed one."""
+    try:
+        return json.loads(KEY_INFO.read_text(encoding="utf-8")).get("expires")
+    except (OSError, ValueError):
+        return None
+
+
+def set_key_expiry(day):
+    """day = "YYYY-MM-DD" or None (no date). The bot shows it on «💰 Ключ OpenAI» and reminds the admins before it."""
+    _write(KEY_INFO, {"expires": day, "t": int(time.time())})
+
+
 def reset_gpt_spend():
     """New OpenAI key saved: the spend counter starts again from 0 (the bot applies it within seconds, or at its next start)."""
     _write(GPT_RESET, {"id": uuid.uuid4().hex, "t": int(time.time())})

@@ -126,6 +126,9 @@ STATUS = LIVE / "app_status.json"     # {"t": heartbeat, "live_on", "dry_run", "
 PID = LIVE / "bot.pid"                # this process's id: the manager app stops the bot by it (botctl.restart)
 SPEND = LIVE / "gpt_spend.json"       # {"usd", "calls", "since", "reset"}: $ spent on OpenAI since the last reset (app shows it)
 GPT_RESET = LIVE / "gpt_reset.json"   # {"id", "t"}: the app writes it when a new OpenAI key is saved -> counter back to 0
+KEY_INFO = LIVE / "openai_key.json"   # {"expires": "YYYY-MM-DD" | None}: the key's last day, typed in the app («Токены»)
+OPENAI_TAX = 0.18                     # OpenAI adds 18% tax to the bill (user, 2026-11-17); same as manager-app/app.py
+KEY_REMIND = (7, 1, 0, -1)            # days before the key's last day when the admins get a reminder (-1 = expired)
 state = load(STATE, {})
 state.setdefault("started", int(time.time()))  # set once, ever: chats from before this moment are never touched
 state["last_restart"] = int(time.time())       # overwritten every start, for the "ℹ️ Статус" message
@@ -886,7 +889,8 @@ def sandbox_order(uid, sb):
 
 
 # ---------------------------------------------------------------- Telegram side
-MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"]], "manager": [["🧪 Тест"]]}
+KEY_BTN = "💰 Ключ OpenAI"
+MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN]], "manager": [["🧪 Тест"]]}
 INSTANT_ON, INSTANT_OFF = "⚡ Отвечает сразу", "⏱ Отвечает как клиентам"
 # who answers in the test chat (live chats always use the rules); the button shows the current one, a tap moves to the next
 ENGINES = {"rules": {"button": "🧩 Отвечают: правила", "model": None, "name": "правила",
@@ -1050,6 +1054,9 @@ def on_message(msg):
         tg.send(uid, "▶️ Бот включён: отвечает во всех новых чатах, пока в них не напишет менеджер." if state["live_on"]
                 else "⏸ Бот выключен: клиентам ничего не пишет (чаты продолжают записываться).")
         return
+    if u["role"] == "admin" and text == KEY_BTN:
+        tg.send(uid, key_report())
+        return
     if u["role"] == "admin" and text == "ℹ️ Статус":
         cs = state["chats"].values()
         mode = ("включён: отвечает во всех новых чатах" if state.get("live_on") and not DRY_RUN
@@ -1151,6 +1158,76 @@ def add_spend(usd):
     save(SPEND, spend)
 
 
+def key_days_left(now):
+    """-> (last day "YYYY-MM-DD", whole days from today (Moscow) to it) or (None, None) if no date was typed in the app."""
+    import datetime as dt
+    exp = load(KEY_INFO, {}).get("expires")
+    if not exp:
+        return None, None
+    today = dt.datetime.fromtimestamp(now, dt.timezone(dt.timedelta(hours=3))).date()
+    return exp, (dt.date.fromisoformat(exp) - today).days
+
+
+def ru_date(day):
+    return time.strftime("%d.%m.%Y", time.strptime(day, "%Y-%m-%d"))
+
+
+def days_word(n):
+    n = abs(n)
+    return "день" if n % 10 == 1 and n % 100 != 11 else "дня" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "дней"
+
+
+def key_report(now=None):
+    """«💰 Ключ OpenAI» (admins): this key's spend from the bot's counter with tax, and how long the key has left."""
+    now = now or int(time.time())
+    apply_spend_reset()
+    usd = spend["usd"]
+    since = time.strftime("%d.%m.%Y %H:%M", time.gmtime(spend["since"] + 3 * 3600)) if spend.get("since") else "—"
+    lines = ["💰 <b>Ключ OpenAI</b>",
+             f"Потрачено: <b>${usd * (1 + OPENAI_TAX):.2f}</b> с налогом {OPENAI_TAX:.0%} (без налога ${usd:.2f}) · запросов: {spend['calls']}",
+             f"Считается с {since} МСК — с тех пор, как вставили этот ключ."]
+    exp, left = key_days_left(now)
+    if exp is None:
+        lines.append("Срок ключа не указан: впишите его в приложении менеджера, вкладка «Токены».")
+    elif left > 0:
+        lines.append(f"Действует до {ru_date(exp)} включительно: осталось <b>{left} {days_word(left)}</b>.")
+    elif left == 0:
+        lines.append(f"⚠️ Сегодня ({ru_date(exp)}) — <b>последний день</b> ключа.")
+    else:
+        lines.append(f"⛔ Срок ключа <b>истёк</b> {ru_date(exp)} ({-left} {days_word(left)} назад).")
+    lines.append("<i>Расходы — по счётчику бота (живые чаты и тест), по ценам OpenAI; точная сумма — в счёте OpenAI.</i>")
+    return "\n".join(lines)
+
+
+def key_reminders(now):
+    """Telegram to the admins at 7 and 1 days before the key's last day, on that day and once it has passed."""
+    exp, left = key_days_left(now)
+    r = state.setdefault("key_remind", {"exp": None, "sent": []})
+    if r.get("exp") != exp:  # a new date (or a new key with its date): reminders start over
+        r.update(exp=exp, sent=[])
+        save(STATE, state)
+    if exp is None:
+        return
+    due = [d for d in KEY_REMIND if left <= d and d not in r["sent"]]
+    if not due:
+        return
+    r["sent"] += due  # several due at once (date typed late): one message, the most urgent
+    save(STATE, state)
+    if left > 0:
+        text = f"⏰ Ключ OpenAI заканчивается через <b>{left} {days_word(left)}</b> ({ru_date(exp)})."
+    elif left == 0:
+        text = f"⚠️ Сегодня <b>последний день</b> ключа OpenAI ({ru_date(exp)})."
+    else:
+        text = f"⛔ Срок ключа OpenAI <b>истёк</b> {ru_date(exp)}: GPT может перестать отвечать, тогда отвечает запасной бот."
+    text += "\nНовый ключ и его срок — в приложении менеджера, вкладка «Токены», потом перезапуск бота."
+    log("key reminder", exp, left)
+    for a in ids_with("admin"):
+        try:
+            tg.send(a, text)
+        except Exception:
+            pass
+
+
 def app_control(now):
     """Start / pause from the manager app (anyone who has the app, same effect as «▶️ Старт» / «⏸ Пауза»)."""
     c = load(CONTROL, {})
@@ -1186,7 +1263,7 @@ def main():
                        else "Он выключен: клиентам ничего не пишет, пока не нажмёте «▶️ Старт»."), keyboard=keyboard(a))
         except Exception:
             pass
-    last_avito = last_clock = 0
+    last_avito = last_clock = last_key = 0
     check_clock()  # know the drift (if any) from the first tick, not just after 10 minutes
     tray_parent = os.getppid() if os.environ.get("AVITO_TRAY") == "1" else None  # started by tray.py on a Mac
     while True:
@@ -1202,6 +1279,12 @@ def main():
             apply_spend_reset()
         except Exception as ex:
             log("app control error", type(ex).__name__, ex)
+        if now - last_key >= 60:  # the key's expiry date: once a minute is plenty
+            last_key = now
+            try:
+                key_reminders(now)
+            except Exception as ex:
+                log("key reminder error", type(ex).__name__, ex)
         try:
             if products_module.refresh():
                 log("products reloaded (manager app edit)", len(PRODUCTS))

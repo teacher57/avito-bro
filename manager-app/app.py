@@ -791,17 +791,31 @@ class App:
                                       else "в приложении не задан: бот использует старый ключ, сохранённый на сервере",
                                       size=12, color=ft.Colors.TERTIARY if status[n] else GREY)], spacing=2)
                 for n, f in fields.items()]
+        old_exp = botctl.key_expiry()
+        exp = ft.TextField(label="Ключ OpenAI действует до (ДД.ММ.ГГГГ)", width=300, hint_text="пусто — срок не указан",
+                           value=datetime.date.fromisoformat(old_exp).strftime("%d.%m.%Y") if old_exp else "")
 
         def save(e):
             new = {n: f.value for n, f in fields.items() if f.value and f.value.strip()}
-            if not new:
-                self.toast("Вставьте ключ", error=True)
+            typed = (exp.value or "").strip()
+            try:
+                day = datetime.datetime.strptime(typed, "%d.%m.%Y").date().isoformat() if typed else None
+            except ValueError:
+                self.toast("Дата — в виде ДД.ММ.ГГГГ, например 31.12.2026", error=True)
+                return
+            if not new and day == old_exp:
+                self.toast("Нечего сохранять: вставьте ключ или измените дату", error=True)
                 return
             def do():
-                sec.set_tokens(new)
-                if "OPENAI_API_KEY" in new:
-                    botctl.reset_gpt_spend()  # a new key = the spend counter starts from $0
-            if self.guard(do, "Ключ сохранён. Он заработает после перезапуска бота. Счётчик расходов обнулён."):
+                if new:
+                    sec.set_tokens(new)
+                    if "OPENAI_API_KEY" in new:
+                        botctl.reset_gpt_spend()  # a new key = the spend counter starts from $0
+                if day != old_exp or new:
+                    botctl.set_key_expiry(day)  # a new key gets the date typed now (empty = no date)
+            done = ("Ключ сохранён. Он заработает после перезапуска бота. Счётчик расходов обнулён." if new
+                    else "Срок ключа сохранён. Бот увидит его сразу, перезапуск не нужен.")
+            if self.guard(do, done):
                 self.show_tokens()
 
         def do_restart():
@@ -809,7 +823,10 @@ class App:
                 self.show_bot()
 
         return section(
-            "Ключ OpenAI", *rows, spend_text(),
+            "Ключ OpenAI", *rows, exp,
+            ui.hint("Последний день, когда ключ работает. Бот напомнит админам в Telegram за 7 дней, за 1 день и в этот "
+                    "день. Вставляете новый ключ — укажите и его срок."),
+            spend_text(),
             ft.Row([ft.FilledButton(content="Сохранить", icon=ft.Icons.SAVE, on_click=save),
                     ft.OutlinedButton(content="Применить: перезапустить бота", icon=ft.Icons.RESTART_ALT,
                                       on_click=lambda e: self.confirm(
