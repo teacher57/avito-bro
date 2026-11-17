@@ -55,7 +55,10 @@ FAST_DELAY = 5              # live back-and-forth (buyer wrote again within ACTI
 ACTIVE_GAP = 5 * 60         # buyer messages closer than this = an active conversation
 HANDBACK_AFTER = 60 * 60    # manager silent this long in a bot chat handed to him -> the chat is the bot's again (new messages only)
 # handoff reasons after which the chat never goes back to the bot: «вы бот?», a photo / voice note / file, a complaint
-NO_HANDBACK = re.compile(r"не бот ли|голосов|прислал фото|жалоб|претензи|недовол|брак|оскорб|груб|complaint", re.I)
+NO_HANDBACK = re.compile(r"не бот ли|голосов|прислал фото|жалоб|претензи|недовол|брак|оскорб|груб|complaint|без карточки товара", re.I)
+# a listing whose title matches no product card (or a chat with no listing at all): the bot doesn't know the item, so the
+# chat goes to the manager right away, before any answer, and never comes back to the bot (user's rule, 17.11)
+UNKNOWN_WHY = "объявление без карточки товара"
 # what a buyer's non-text Avito message becomes in the chat log; any of these -> straight to the manager, no GPT
 MEDIA = {"image": "[фото]", "voice": "[голосовое]", "video": "[видео]", "file": "[файл]"}
 MEDIA_WHY = "media from buyer: photo / voice / file, Maxim looks"
@@ -304,7 +307,7 @@ def avito_poll():
                                           "assigned": bool(state.get("live_on")),
                                           "answered_upto": 0}
             log("new chat", cid, conv["title"], "assigned" if conv["assigned"] else "")
-            if conv["assigned"]:
+            if conv["assigned"] and conv["model"]:  # unknown listing: no 🎲, it goes to the manager on the first message
                 for u in [a for a in ids_with("admin") if a not in ids_with("manager")]:  # not to managers (user's rule, 14.11)
                     tg.send(u, f"🎲 Новый чат ведёт бот: <b>{e(conv['title'][:50])}</b> · {e(buyer)}. "
                                f"Если менеджер напишет в нём сам, чат перейдёт к нему.\n<a href=\"https://www.avito.ru/profile/messenger/channel/{cid}\">Открыть на Авито</a>")
@@ -470,6 +473,12 @@ def tick_real(now):
         if conv.get("escalated") or (conv["assigned"] and conv.get("human")):
             continue  # handed to the manager (or the manager wrote himself): the bot doesn't answer until may_hand_back
         block, last_t = pending_block(conv)
+        if conv["assigned"] and not conv.get("model") and (block or order_only(conv)):
+            conv["model"] = model_for_item(conv.get("title"))  # a card may have been added in the app since the chat began
+            if not conv["model"]:
+                unknown_listing(cid, conv, now, block)
+                save(STATE, state)
+                continue
         if block and now - last_t >= reply_delay(conv, block):
             reply, photos, esc, why, cost_usd = decide_live(conv, conv["model"], conv["price"])
             mark_done(conv)
@@ -706,6 +715,21 @@ def notify_order(cid, conv, msg, handed=True, size=None, keeps=False, note=None)
     log("order notified", cid)
 
 
+def unknown_listing(cid, conv, now, block):
+    """No product card matches this listing: hand the chat to the manager at once, without any answer from the bot."""
+    msgs = block or [avito_order_msg(conv)]
+    mark_done(conv)
+    conv["order_hello"] = True  # an order-only chat: no greeting from the bot either
+    send_live = is_live(now, conv)
+    conv["escalated"], conv["handed_t"] = UNKNOWN_WHY, now
+    conv["msgs"].append({"t": now, "who": "bot", "text": f"→ передано менеджеру ({UNKNOWN_WHY})", "sent": send_live})
+    if send_live or NOTIFY_MANAGER_REAL:
+        notify_handoff(ids_with("manager") or ids_with("admin"), conv, cid, msgs,
+                       UNKNOWN_WHY + " (бот не знает этот товар; добавьте его в приложении менеджера)", real=True)
+    notify_admins_block(cid, conv, msgs)
+    log("unknown listing: handed to manager", cid, conv.get("title"))
+
+
 def notify_handoff(to, conv, cid, block, why, real):
     link = f"https://www.avito.ru/profile/messenger/channel/{cid}" if real else None
     text = (f"🧑‍💼 <b>Нужен менеджер</b>{' (тест)' if not real else ''}\n<b>{e(conv.get('title', 'тестовый чат')[:50])}</b> · {e(conv.get('buyer', ''))}\n"
@@ -725,6 +749,17 @@ def tick_sandbox(now):
         if sb.get("escalated"):
             continue
         block, last_t = pending_block(sb)
+        if not sb["model"] and (block or order_only(sb)):  # «Без товара» = a listing with no card: straight to the manager
+            msgs = block or [avito_order_msg(sb)]
+            mark_done(sb)
+            sb["order_hello"] = True
+            sb["escalated"] = UNKNOWN_WHY
+            sb["msgs"].append({"t": now, "who": "bot", "text": f"→ передано менеджеру ({UNKNOWN_WHY})", "sent": True})
+            tg.send(uid, "🧑‍💼 <i>Товар не выбран — как объявление без карточки товара: бот сразу отдал чат менеджеру и "
+                         "ничего не написал. Выберите товар и «♻️ Сброс» — начать заново.</i>")
+            notify_handoff([int(uid)], {"title": "тестовый чат", "buyer": ""}, None, msgs, UNKNOWN_WHY, real=False)
+            save(STATE, state)
+            continue
         if block and now - last_t >= (0 if instant(uid) else reply_delay(sb, block)):
             gpt_note = ""
             eng = ENGINES[engine(uid)]
