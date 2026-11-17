@@ -35,14 +35,18 @@ def read_bytes(path):
         return f.read()
 
 
+OPENAI_TAX = 0.18  # OpenAI adds 18% tax to the bill (user, 2026-11-17): shown amounts include it; the bot's counter doesn't
+
+
 def spend_text():
-    """«$1.23 потрачено на OpenAI с 13.11 12:00 МСК · 45 запросов» from the bot's counter (botctl.gpt_spend)."""
+    """«$1.23 потрачено на OpenAI с 13.11 12:00 МСК · 45 запросов» from the bot's counter (botctl.gpt_spend), with tax."""
     s = botctl.gpt_spend()
-    usd = f"${s['usd']:.2f}" if s["usd"] >= 0.01 or s["usd"] == 0 else f"${s['usd']:.4f}"
+    total = s["usd"] * (1 + OPENAI_TAX)
+    usd = f"${total:.2f}" if total >= 0.01 or total == 0 else f"${total:.4f}"
     since = (f" с {datetime.datetime.fromtimestamp(s['since'] + 3 * 3600, datetime.UTC):%d.%m.%Y %H:%M} МСК"
              if s["since"] else "")
     return ft.Column([ft.Text(usd, size=32, weight=ft.FontWeight.BOLD),
-                      ui.hint(f"потрачено на токены OpenAI{since} · запросов: {s['calls']}")],
+                      ui.hint(f"потрачено на токены OpenAI{since}, с налогом {OPENAI_TAX:.0%} · запросов: {s['calls']}")],
                      spacing=0)
 
 
