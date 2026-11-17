@@ -1,0 +1,19 @@
+# environments and installs (setup.cmd creates them on each PC)
+.venv/
+python/
+__pycache__/
+*.pyc
+*.lnk
+# secrets: never in git
+.env
+manager-app/data/
+# live state: chats, roles, logs; copied by hand when the bot moves
+live/
+prompt_history/
+.claude/
+# analysis-only data
+data/test100*
+data/train/cls_*
+# instructions and specs stay only on the admin's Mac (user, 2026-11-17)
+*.md
+!ROADMAP.md
