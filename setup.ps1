@@ -131,10 +131,12 @@ Write-Host "Shortcut 'BRO x BRO Manager' created in manager-app (copy it to the 
 #    The icon menu item "turn off the bot and close" stops the bot; if the icon dies, Windows kills the bot with it (job object).
 $appPyw = Join-Path $App ".venv\Scripts\pythonw.exe"
 $action = New-ScheduledTaskAction -Execute $appPyw -Argument "`"$(Join-Path $Root 'tray.py')`"" -WorkingDirectory $Root
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+# The account from Windows itself: over SSH %USERDOMAIN% is WORKGROUP, which doesn't map to the user (error 0x80070534)
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $me
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
+$principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive
 Register-ScheduledTask -TaskName "AvitoBot" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 Write-Host "Scheduled task AvitoBot registered (starts the tray icon at logon; the icon starts the bot)"
 
