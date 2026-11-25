@@ -67,9 +67,17 @@ $serve = ""; if (Test-Path $ts) { $serve = ((& $ts serve status 2>$null) -join "
 "PY=$(Test-Path "$env:USERPROFILE\claude_trusted\avito\bot\python")"
 "TASK=$([bool](Get-ScheduledTask -TaskName HubBroServer -ErrorAction SilentlyContinue))"
 "SERVE=$(if ($serve -match "127.0.0.1:8790") { "yes" } else { "no" })"
+# код устройства для лицензии BOT BRO — как bot/bot_license.py device_code(): первые 20 hex
+# SHA-256("bot-bro-device:" + MachineGuid в нижнем регистре), заглавными, группами по 5
+try {
+  $guid = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid).MachineGuid.Trim().ToLower()
+  $hex = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("bot-bro-device:" + $guid)) | ForEach-Object { $_.ToString("x2") })
+  $h = $hex.Substring(0, 20).ToUpper()
+  "DEVICE=" + (($h.Substring(0, 5), $h.Substring(5, 5), $h.Substring(10, 5), $h.Substring(15, 5)) -join "-")
+} catch { "DEVICE=" }
 ')
 val() { printf '%s\n' "$INFO" | sed -n "s/^$1=//p" | head -1; }
-PROFILE=$(val PROFILE); COMPUTER=$(val COMPUTER); DNS=$(val DNS); NODEV=$(val NODE)
+PROFILE=$(val PROFILE); COMPUTER=$(val COMPUTER); DNS=$(val DNS); NODEV=$(val NODE); DEVICE=$(val DEVICE)
 [ -n "$PROFILE" ] || { echo "   не удалось узнать папку профиля"; printf '%s\n' "$INFO"; exit 1; }
 DEST="$PROFILE\\claude_trusted\\avito"
 DEST_SCP="${PROFILE//\\//}/claude_trusted/avito"
@@ -77,6 +85,7 @@ echo "   профиль:   $PROFILE"
 echo "   компьютер: $COMPUTER"
 echo "   tailscale: ${DNS:-(не найден)}"
 echo "   node:      ${NODEV:-(нет)}"
+echo "   код устройства для лицензии: ${DEVICE:-(не удалось узнать)}"
 echo "   avito:     $( [ "$(val INSTALLED)" = True ] && echo "уже стоит — обновление" || echo "новая установка" )"
 [ -n "$NODEV" ] || { echo "   нет Node.js — запустите prepare.ps1 у клиента"; exit 1; }
 if [ $HUB = 1 ] && [ -z "$DNS" ]; then echo "   нет адреса Tailscale — запустите prepare.ps1 у клиента"; exit 1; fi
@@ -198,5 +207,6 @@ if [ $HUB = 1 ]; then
 fi
 if [ $BOT = 1 ]; then
   echo "   $n. У клиента: ярлык «BOT BRO» → первая настройка (PIN и токены) → прислать код устройства"; n=$((n+1))
-  echo "   $n. Здесь: node licensing/license.mjs new \"Клиент\" <код> [срок] → show → ключ клиенту; выложить avito/licenses.json"
+  echo "   $n. Лицензия, код устройства ${DEVICE:-<из BOT BRO>}:"
+  echo "        node licensing/license.mjs new \"Клиент\" ${DEVICE:-<код>} [срок] → show → ключ клиенту; выложить avito/licenses.json"
 fi
