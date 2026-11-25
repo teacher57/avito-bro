@@ -99,7 +99,7 @@ PKG="$WORK/avito"; mkdir -p "$PKG"
 rsync -a --exclude='.git' --exclude='.venv' --exclude='live' --exclude='python' --exclude='__pycache__' --exclude='*.pyc' \
   --exclude='manager-app/data' --exclude='.env' --exclude='.env.*' --exclude='node_modules' --exclude='web/dist' \
   --exclude='data/store' --exclude='access-key.txt' --exclude='*.log' --exclude='licensing' --exclude='clients' \
-  --exclude='.DS_Store' --exclude='*.lnk' --exclude='*.md' --include='*/' "$SRC/" "$PKG/"
+  --exclude='.DS_Store' --exclude='*.lnk' --exclude='*.md' --exclude='hub-bro/data' --include='*/' "$SRC/" "$PKG/"
 # документы хаба и формата данных нужны и на месте; инструкции бота и INSTALL.md — только на Mac
 for d in hub-bro/docs data/schema data/server data/design; do
   [ -d "$SRC/$d" ] && rsync -a --include='*/' --include='*.md' --exclude='*' "$SRC/$d/" "$PKG/$d/"
