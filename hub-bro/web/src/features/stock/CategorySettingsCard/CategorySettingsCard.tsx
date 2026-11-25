@@ -98,6 +98,7 @@ export function CategorySettingsCard({ category, categories, models, change }: P
           </p>
           <SizeListEditor
             scale={scale}
+            labels={category.labels}
             items={category.sizes.map((size) => ({ size, canDelete: true }))}
             onReorder={(order) => setSizes(order, `Категория «${category.name}»: порядок размеров изменён`)}
             onAutoSort={() =>

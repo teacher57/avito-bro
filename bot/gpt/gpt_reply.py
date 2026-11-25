@@ -197,7 +197,7 @@ def table_text(prod):
     """The product's size table as «size | label | col…» rows (catalog sizeTable; label from the size scale)."""
     if not prod or not prod["table"]:
         return "(нет таблицы)"
-    return "\n".join("  " + r for r in table_lines(prod["table"], SIZE_LABEL))
+    return "\n".join("  " + r for r in table_lines(prod["table"], prod.get("labels") or SIZE_LABEL))
 
 
 def known_hw(msgs):
@@ -260,7 +260,8 @@ def letter_chart(block, prod):
         return None
     lab = letters.pop()
     in_table = set(prod["table"]["rows"]) if prod.get("table") else None
-    nums = [n for n, l in sorted(SIZE_LABEL.items()) if l.endswith(f"({lab})") and (in_table is None or n in in_table)]
+    labels = prod.get("labels") or SIZE_LABEL  # this product's category letters
+    nums = [n for n, l in sorted(labels.items()) if str(l).endswith(f"({lab})") and (in_table is None or n in in_table)]
     if not nums:
         return None
     if len(nums) == 1:
@@ -413,7 +414,7 @@ def stock_line(prod):
         have = prod.get("in_sizes") or []
         if not have:
             return OUT_OF_STOCK_LINE
-        label = lambda n: _products.SIZE_LABEL.get(n, str(n))
+        label = lambda n: (prod.get("labels") or {}).get(n) or _products.SIZE_LABEL.get(n, str(n))
         gone = [n for n in prod["sizes"] if n not in have]
         return ("- РАЗМЕРЫ В НАЛИЧИИ — ТОЛЬКО ЭТИ: " + ", ".join(label(n) for n in have) + ". Других размеров этой модели "
                 "сейчас нет" + (f" (в том числе {', '.join(label(n) for n in gone)})" if gone else "") + ". Если покупатель "

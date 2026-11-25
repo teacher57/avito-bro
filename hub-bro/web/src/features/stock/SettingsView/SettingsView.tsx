@@ -53,7 +53,7 @@ export function SettingsView({ models, categories, display, sizeScale, change }:
           <ModelsSection models={models} categories={categories} change={change} onAddCategory={() => setSection("categories")} />
         )}
         {section === "categories" && <CategoriesSection models={models} categories={categories} change={change} />}
-        {section === "sizes" && <SizeScalePanel sizeScale={sizeScale} change={change} />}
+        {section === "sizes" && <SizeScalePanel sizeScale={sizeScale} categories={categories} models={models} change={change} />}
         {section === "display" && <DisplaySettingsPanel display={display} change={change} />}
       </div>
     </div>

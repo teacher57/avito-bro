@@ -36,11 +36,15 @@ export function compareSizes(a: string, b: string) {
 /** Размер — только номер: «30». Буква живёт в шкале магазина (catalog.sizeScale). */
 export const isSizeNumber = (s: string) => /^\d{1,3}$/.test(s);
 
-/** Размер для людей: «30 (M)», если у размера в шкале есть буква, иначе «30». */
-export function formatSize(size: string, scale: SizeLabel[]) {
-  const label = scale.find((s) => s.size === size)?.label;
+/** Размер для людей: «30 (M)». Буква — из категории товара (labels), иначе из шкалы магазина; нет буквы — «30». */
+export function formatSize(size: string, scale: SizeLabel[], labels?: Record<string, string>) {
+  const label = labels?.[size] || scale.find((s) => s.size === size)?.label;
   return label ? `${size} (${label})` : size;
 }
+
+/** Буквы размеров категории (Category.labels) по id категории. */
+export const categoryLabels = (categories: { id: string; labels?: Record<string, string> }[], categoryId?: string) =>
+  categories.find((c) => c.id === categoryId)?.labels;
 
 function compareAttention(a: SizeSummary, b: SizeSummary) {
   return LEVEL_RANK[a.level] - LEVEL_RANK[b.level] || a.qty - b.qty || compareSizes(a.size, b.size);

@@ -7,13 +7,15 @@ type Props = SizeSummary & {
   variant?: "compact" | "tag";
   /** Если задан, чип — кнопка: переход к этому размеру. */
   onClick?: () => void;
+  /** Буквы размеров категории товара — для «30 (M)». */
+  labels?: Record<string, string>;
 };
 
-export function SizeChip({ size, qty, incoming, level, variant = "compact", onClick }: Props) {
+export function SizeChip({ size, qty, incoming, level, variant = "compact", onClick, labels }: Props) {
   const { display } = useStockSettings();
   const { sizeScale } = useStock();
   // В плитке места мало — только номер; в строке размера — с буквой из шкалы: «30 (M)».
-  const label = variant === "tag" ? formatSize(size, sizeScale) : size;
+  const label = variant === "tag" ? formatSize(size, sizeScale, labels) : size;
   const className = `${styles.chip} ${styles[variant]} ${onClick ? styles.clickable : ""}`;
   const content = (
     <>

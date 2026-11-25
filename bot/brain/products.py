@@ -49,9 +49,24 @@ def scale_of(catalog):
     return scale or list(DEFAULT_SCALE)
 
 
-def size_labels(catalog):
-    """{30: "30 (M)", …} (a size with no letter: just «35»)."""
-    return {int(s): (f"{s} ({lab})" if lab else s) for s, lab in scale_of(catalog)}
+def size_labels(catalog, category_id=None):
+    """{30: "30 (M)", …} (a size with no letter: just «35»). Letters: the category's own (Category.labels, every category
+    has its own mapping) first, else the shop scale's default label."""
+    own = next((c.get("labels") or {} for c in (catalog or {}).get("categories") or []
+                if isinstance(c, dict) and c.get("id") == category_id), {}) if category_id else {}
+    return {int(s): (f"{s} ({own.get(s) or lab})" if (own.get(s) or lab) else s) for s, lab in scale_of(catalog)}
+
+
+def letter_numbers(catalog):
+    """{"M": {30, 31, 32}, …}: every letter any category (or the shop scale) uses -> the size numbers it can mean.
+    Used to read «хочу M» before the product is known; per product the letters come from its own category."""
+    out = {}
+    cats = [None] + [c.get("id") for c in (catalog or {}).get("categories") or [] if isinstance(c, dict)]
+    for cid in cats:
+        for n, label in size_labels(catalog, cid).items():
+            if "(" in str(label):
+                out.setdefault(label.partition("(")[2].rstrip(")"), set()).add(n)
+    return out
 
 
 def read_hw(h):
@@ -133,6 +148,7 @@ def build(catalog, stock=None, shop=None):
             "id": p["id"], "name": p.get("name") or p["id"], "key": p.get("botKey") or p["id"],
             "match": [w.strip().lower() for w in p.get("match") or [] if w and w.strip()],
             "in_stock": in_stock, "out_sizes": out,
+            "labels": size_labels(catalog, p.get("categoryId")),  # {30: "30 (M)"}: this product's category letters
             # the product's sizes in its own order and the ones in stock now (ints): GPT gets the in-stock list as is,
             # the size guard treats any other size (also one the product doesn't have at all) as not available
             "sizes": [n for n in (_int(s) for s in p.get("sizes") or []) if n is not None],
@@ -161,7 +177,8 @@ def file_names(catalog):
 
 PRODUCTS = []
 BY_KEY = {}
-SIZE_LABEL = {}   # {25: "25 (2XS)", …}: the shop's size scale, from catalog.sizeScale
+SIZE_LABEL = {}   # {25: "25 (2XS)", …}: the shop's size scale, from catalog.sizeScale (default letters)
+LETTER_NUMS = {}  # {"M": {30, 31}, …}: letters of every category -> sizes (to read «хочу M» before the product is known)
 DATA = {"catalog": None, "stock": None, "shop": None}  # the raw JSON values the products were built from
 ON_RELOAD = []  # callbacks run after a reload (fit.py re-reads its size tables, brain.py rebuilds its size patterns)
 _state = {"revs": {}, "checked": 0.0, "online": False}
@@ -172,6 +189,8 @@ def _apply(check_files=False):
     fresh = build(DATA["catalog"], DATA["stock"], DATA["shop"])
     SIZE_LABEL.clear()
     SIZE_LABEL.update(size_labels(DATA["catalog"]))
+    LETTER_NUMS.clear()
+    LETTER_NUMS.update(letter_numbers(DATA["catalog"]))
     PRODUCTS[:] = fresh
     BY_KEY.clear()
     BY_KEY.update({p["key"]: p for p in fresh})
@@ -242,6 +261,13 @@ def in_stock(model_key):
     """False only when the product is known and out of stock (warehouse shelf empty / «нет в наличии» / archived)."""
     p = BY_KEY.get(model_key)
     return True if p is None else p["in_stock"]
+
+
+def label_of(model_key, n):
+    """«30 (M)» with the letters of this product's category; unknown product -> the shop scale's default."""
+    p = BY_KEY.get(model_key)
+    labels = (p or {}).get("labels") or SIZE_LABEL
+    return labels.get(n) or SIZE_LABEL.get(n) or str(n)
 
 
 def in_sizes(model_key):

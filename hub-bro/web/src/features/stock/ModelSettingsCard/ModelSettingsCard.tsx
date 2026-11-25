@@ -189,6 +189,7 @@ export function ModelSettingsCard({ model, models, categories, change }: Props) 
           </p>
           <SizeListEditor
             scale={scale}
+            labels={categories.find((c) => c.id === model.categoryId)?.labels}
             items={model.sizes.map((s) => ({
               size: s.size,
               hidden: model.hiddenSizes?.includes(s.size),
@@ -205,7 +206,7 @@ export function ModelSettingsCard({ model, models, categories, change }: Props) 
               )
             }
             onAdd={(size) =>
-              patch(`«${model.name}»: добавлен размер ${formatSize(size, scale)}`, (m) => ({
+              patch(`«${model.name}»: добавлен размер ${formatSize(size, scale, categories.find((c) => c.id === model.categoryId)?.labels)}`, (m) => ({
                 ...m,
                 sizes: [...m.sizes, { size, stock: [], units: [] }],
               }))

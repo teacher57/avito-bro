@@ -14,6 +14,8 @@ type Props = {
   items: SizeListItem[];
   /** Шкала магазина: рядом с номером показываем букву — «30 (M)». */
   scale: SizeLabel[];
+  /** Буквы размеров категории (главнее шкалы). */
+  labels?: Record<string, string>;
   onReorder: (sizes: string[]) => void;
   onAutoSort: () => void;
   onAdd: (size: string) => void;
@@ -23,7 +25,7 @@ type Props = {
 };
 
 /** Размеры с перетаскиванием порядка, скрытием, удалением и добавлением. */
-export function SizeListEditor({ items, scale, onReorder, onAutoSort, onAdd, onDelete, onToggleHidden }: Props) {
+export function SizeListEditor({ items, scale, labels, onReorder, onAutoSort, onAdd, onDelete, onToggleHidden }: Props) {
   const [drag, setDrag] = useState<{ from: string; order: string[] } | null>(null);
   const [newSize, setNewSize] = useState("");
   const bySize = new Map(items.map((i) => [i.size, i]));
@@ -73,7 +75,7 @@ export function SizeListEditor({ items, scale, onReorder, onAutoSort, onAdd, onD
               <span className={styles.handle} aria-hidden="true">
                 ⋮⋮
               </span>
-              <span className={styles.size}>{formatSize(size, scale)}</span>
+              <span className={styles.size}>{formatSize(size, scale, labels)}</span>
               {onToggleHidden && (
                 <button
                   type="button"

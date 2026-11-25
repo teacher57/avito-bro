@@ -17,7 +17,7 @@ import numpy as np
 from scipy.sparse import hstack
 from fit import TABLES, compare, client_measures, size_by_measures
 import products as _products
-from products import PRODUCTS, BY_KEY, SIZE_LABEL, product_for_item, in_stock, in_sizes, out_sizes, hw_size, next_photo
+from products import PRODUCTS, BY_KEY, SIZE_LABEL, LETTER_NUMS, label_of, product_for_item, in_stock, in_sizes, out_sizes, hw_size, next_photo
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import NearestNeighbors
@@ -640,7 +640,9 @@ LEG_COLS = ("выход", "полувыход")
 
 def scale_letters():
     """The scale's letters in its order, each once: ["2XS", "XS", "S", "M", "L", "XL"]."""
-    return list(dict.fromkeys(l.partition("(")[2].rstrip(")") for _, l in sorted(SIZE_LABEL.items()) if "(" in l))
+    # letters of the shop scale in its order, then letters only some categories use (every category has its own mapping)
+    base = [l.partition("(")[2].rstrip(")") for _, l in sorted(SIZE_LABEL.items()) if "(" in l]
+    return list(dict.fromkeys(base + sorted(LETTER_NUMS)))
 
 
 def size_patterns():
@@ -669,7 +671,7 @@ def sizes_in(text):
     if not nums:
         for m in SIZE_LETTER.finditer(t):
             lab = m.group(1).upper().replace("XXS", "2XS")
-            nums |= {n for n, l in SIZE_LABEL.items() if l.endswith(f"({lab})")}
+            nums |= set(LETTER_NUMS.get(lab, ()))
     return sorted(nums)
 
 
@@ -875,8 +877,9 @@ def size_guard(out, model, text, context=""):
     listed = len(re.findall(rf"(?<!\d)(?:{_NUMS})(?!\d)", reply)) >= 3  # GPT listed sizes itself
     if is_stock(text) and not sizes_in(text) and not listed and "нет в наличии" not in reply.lower():  # «какие размеры есть?»
         if have is not None:
-            return {**out, "reply": reply.rstrip() + " Сейчас в наличии: " + ", ".join(SIZE_LABEL.get(n, str(n)) for n in have) + ".",
-                    "why": why("listed in-stock sizes")}
+            tail = (" Сейчас в наличии: " + ", ".join(label_of(model, n) for n in have) + ".") if have else \
+                " Сейчас этой модели нет в наличии."
+            return {**out, "reply": reply.rstrip() + tail, "why": why("listed in-stock sizes")}
         return {**out, "reply": reply.rstrip() + f" Сейчас нет в наличии только {_sizes_ru(sorted(gone))}.",
                 "why": why("listed missing sizes")}
     return out
@@ -938,9 +941,9 @@ class Brain:
         hw = (BY_KEY.get(model) or {}).get("hw")
         if hw and height and weight:  # the product's own height x weight table (manager app) wins; empty cell = Maxim
             n = hw_size(hw, height, weight)
-            return SIZE_LABEL.get(n, str(n)) if n else None
+            return label_of(model, n) if n else None
         if self.tree is not None and height and weight:
-            return SIZE_LABEL.get(int(self.tree.predict(np.array([[height, weight]]))[0]))
+            return label_of(model, int(self.tree.predict(np.array([[height, weight]]))[0]))
         rows = self.sizes.get(model)
         if not rows or height is None or weight is None:
             return None

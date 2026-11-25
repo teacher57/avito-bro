@@ -707,7 +707,7 @@ def ordered_size(conv):
             if m["who"] in ("bot", "shop") and (m["who"] == "shop" or m.get("sent")):
                 f = brain_module.REPLY_SIZE.search(m["text"] or "")
                 if f:
-                    return brain_module.SIZE_LABEL.get(int(f.group(1) or f.group(2)), "")
+                    return products_module.label_of(conv.get("model"), int(f.group(1) or f.group(2)))
         return ""
 
 

@@ -125,6 +125,8 @@ export type Category = {
   /** Шаблон размеров: новая модель категории получает их, окно поставки их подсказывает. */
   sizes: string[];
   thresholds: Thresholds;
+  /** Буквы размеров этой категории: {"30": "M"} — у каждой категории своё соответствие. Нет — буква из шкалы магазина. */
+  labels?: Record<string, string>;
 };
 
 export type DisplaySettings = {

@@ -9,10 +9,12 @@ type Props = {
   batch: Batch;
   modelName: string;
   size: string;
+  /** Буквы размеров категории товара. */
+  labels?: Record<string, string>;
 };
 
 /** Джинса с заказом; раскрывается в подробности. */
-export function UnitRow({ unit, batch, modelName, size }: Props) {
+export function UnitRow({ unit, batch, modelName, size, labels }: Props) {
   const [open, setOpen] = useState(false);
   const status = UNIT_STATUS[unit.status];
   const { sizeScale } = useStock();
@@ -28,7 +30,7 @@ export function UnitRow({ unit, batch, modelName, size }: Props) {
         <dl className={styles.info}>
           <dt>Товар</dt>
           <dd>
-            {modelName}, {formatSize(size, sizeScale)}
+            {modelName}, {formatSize(size, sizeScale, labels)}
           </dd>
           <dt>Заказ</dt>
           <dd>

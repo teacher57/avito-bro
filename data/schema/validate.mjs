@@ -129,6 +129,12 @@ function catalog(c, v) {
       c.str(cat.name, `${p}.name`);
       sizeList(c, cat.sizes, `${p}.sizes`, scale);
       thresholds(c, cat.thresholds, `${p}.thresholds`);
+      if (cat.labels !== undefined && c.obj(cat.labels, `${p}.labels`)) {
+        for (const [size, label] of Object.entries(cat.labels)) {
+          if (scale && !scale.has(size)) c.err(`${p}.labels["${size}"]`, `размера «${size}» нет в sizeScale`);
+          c.need(isStr(label) && /^[0-9A-Z]{0,4}$/.test(label), `${p}.labels["${size}"]`, "буквы размера: 0-9 A-Z, до 4 знаков");
+        }
+      }
       catIds.add(cat.id);
     });
     c.unique(v.categories.map((x) => x?.id), "categories", "id");
