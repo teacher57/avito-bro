@@ -130,6 +130,7 @@ if [ $DRY = 1 ]; then
     [ "$(val STORE)" = True ] && ok "данные магазина уже есть" || plan "новый магазин «$SHOP», наличие со склада"
     [ "$(val TASK)" = True ] && ok "автозапуск HubBroServer уже есть (будет перезапущен)" || plan "автозапуск HubBroServer"
     [ "$(val SERVE)" = yes ] && ok "https-адрес $HUB_URL уже настроен" || plan "https-адрес $HUB_URL (tailscale serve)"
+    plan "значок HUB BRO в трее (задача HubBroTray, при входе в Windows)"
     plan "расширение для клиента: $CLIENT_EXT"
   fi
   if [ $BOT = 1 ]; then
@@ -183,6 +184,15 @@ schtasks /Run /TN HubBroServer | Out-Null
 \$ts = \"\$env:ProgramFiles\\Tailscale\\tailscale.exe\"
 if (((& \$ts serve status 2>\$null) -join ' ') -match '127.0.0.1:8790') { 'https-адрес уже настроен' }
 else { & \$ts serve --bg 8790 | Out-Null; 'https-адрес настроен' }
+# значок HUB BRO в трее: при входе пользователя в Windows (задача HubBroTray), сразу запускаем
+\$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+\$act = New-ScheduledTaskAction -Execute \"\$env:WINDIR\\System32\\wscript.exe\" -Argument '\"$DEST\\hub-bro\\server\\hub-tray.vbs\"'
+\$trg = New-ScheduledTaskTrigger -AtLogOn -User \$me
+\$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+\$prn = New-ScheduledTaskPrincipal -UserId \$me -LogonType Interactive
+Register-ScheduledTask -TaskName HubBroTray -Action \$act -Trigger \$trg -Settings \$set -Principal \$prn -Force | Out-Null
+Start-ScheduledTask -TaskName HubBroTray
+'значок HUB BRO в трее: при входе в Windows (задача HubBroTray), запущен'
 " | sed 's/^/   /'
   mkdir -p "$(dirname "$CLIENT_EXT")"; rm -rf "$CLIENT_EXT"; cp -R "$PKG/hub-bro/extension" "$CLIENT_EXT"
   ok "расширение для клиента: $CLIENT_EXT (и у клиента: $DEST\\hub-bro\\extension)"
