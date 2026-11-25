@@ -3,8 +3,10 @@
 # в сеансе пользователя. Без Python и других зависимостей: только PowerShell и Windows Forms.
 #
 # Цвет: зелёный — хаб и сервер данных работают; жёлтый — работает только одно; красный — ничего.
-# Меню: состояние, «Открыть кабинет», «Перезапустить хаб» (спросит права администратора), «Открыть лог хаба»,
-# «Открыть лог сервера данных», «Убрать значок».
+# Меню: состояние, «Открыть кабинет», «Выключить хаб» / «Включить хаб», «Перезапустить хаб» (всё это спросит права
+# администратора — хаб работает от SYSTEM), «Открыть лог хаба», «Открыть лог сервера данных», «Убрать значок».
+# «Выключить хаб» — до перезагрузки (при включении компьютера хаб стартует сам). Сервер данных при этом остаётся, если на
+# компьютере стоит бот: он нужен боту и приложению BOT BRO; без бота выключается и он.
 #
 # Запуск при входе в Windows — задача HubBroTray (её создаёт deploy.sh), вручную — hub-tray.vbs (без окна).
 # Файл сохранён в UTF-8 с BOM: иначе Windows PowerShell 5.1 прочитает русский текст как «кракозябры».
@@ -70,6 +72,7 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $stateItem = $menu.Items.Add("Проверка…"); $stateItem.Enabled = $false
 [void]$menu.Items.Add("-")
 $openItem = $menu.Items.Add("Открыть кабинет")
+$toggleItem = $menu.Items.Add("Выключить хаб")
 $restartItem = $menu.Items.Add("Перезапустить хаб")
 [void]$menu.Items.Add("-")
 $hubLogItem = $menu.Items.Add("Открыть лог хаба")
@@ -79,6 +82,7 @@ $exitItem = $menu.Items.Add("Убрать значок")
 $tray.ContextMenuStrip = $menu
 
 $script:last = ""
+$script:hubUp = $false
 function Refresh {
     $hub = Up "http://127.0.0.1:8790/"
     $data = Up "http://127.0.0.1:8791/api/health"
@@ -86,6 +90,8 @@ function Refresh {
     elseif ($hub) { $s = "part"; $text = "HUB BRO: сервер данных не отвечает" }
     elseif ($data) { $s = "part"; $text = "HUB BRO: кабинет не отвечает" }
     else { $s = "down"; $text = "HUB BRO не работает" }
+    $script:hubUp = $hub
+    $toggleItem.Text = if ($hub) { "Выключить хаб" } else { "Включить хаб" }
     $tray.Icon = $Icons[$s]
     $tray.Text = $text                      # подсказка при наведении (до 63 символов)
     $stateItem.Text = $text
@@ -99,6 +105,40 @@ function Refresh {
 }
 
 $openItem.add_Click({ Start-Process (HubUrl) })
+
+# Команда с правами администратора (задача HubBroServer работает от SYSTEM). Windows спросит разрешение.
+function RunAdmin($cmd, $what) {
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    try { Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $enc"; return $true }
+    catch { Log "$what cancelled: $($_.Exception.Message)"; return $false }
+}
+
+$toggleItem.add_Click({
+    if ($script:hubUp) {
+        $keepData = Test-Path (Join-Path $Avito "bot")
+        $msg = "Выключить HUB BRO? Кабинет перестанет открываться у всех до перезагрузки компьютера или до «Включить хаб»." +
+               $(if ($keepData) { "`n`nСервер данных останется работать — он нужен боту." } else { "" })
+        $ok = [System.Windows.Forms.MessageBox]::Show($msg, "HUB BRO", "YesNo", "Warning")
+        if ($ok -ne "Yes") { return }
+        Log "turn off requested (keep data server: $keepData)"
+        # хаб — node с «server\server.mjs» без «data\» перед ним; сервер данных — «data\server\server.mjs»
+        $pattern = if ($keepData) { '(?<!data\\)server\\server\.mjs' } else { 'server\\server\.mjs' }
+        $cmd = @"
+schtasks /End /TN HubBroServer | Out-Null
+Get-CimInstance Win32_Process -Filter "name='node.exe'" | Where-Object { `$_.CommandLine -match '$pattern' } |
+  ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+"@
+        if (RunAdmin $cmd "turn off") {
+            $tray.ShowBalloonTip(5000, "HUB BRO", "Хаб выключается.", [System.Windows.Forms.ToolTipIcon]::Info)
+        }
+    } else {
+        Log "turn on requested"
+        if (RunAdmin "schtasks /Run /TN HubBroServer | Out-Null" "turn on") {
+            $tray.ShowBalloonTip(5000, "HUB BRO", "Хаб включается — около 10 секунд.", [System.Windows.Forms.ToolTipIcon]::Info)
+        }
+    }
+    $timer.Stop(); $timer.Interval = 4000; $timer.Start()   # быстрее показать новое состояние, потом снова раз в 10 с
+})
 $restartItem.add_Click({
     Log "restart requested"
     # Задача работает от SYSTEM: остановить и запустить её можно только с правами администратора (Windows спросит).
@@ -109,11 +149,9 @@ Get-CimInstance Win32_Process -Filter "name='node.exe'" | Where-Object { $_.Comm
 Start-Sleep 2
 schtasks /Run /TN HubBroServer | Out-Null
 '@
-    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-    try {
-        Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $enc"
+    if (RunAdmin $cmd "restart") {
         $tray.ShowBalloonTip(5000, "HUB BRO", "Хаб перезапускается — около 10 секунд.", [System.Windows.Forms.ToolTipIcon]::Info)
-    } catch { Log "restart cancelled: $($_.Exception.Message)" }
+    }
 })
 $hubLogItem.add_Click({ if (Test-Path $HubLog) { Start-Process notepad.exe $HubLog } })
 $dataLogItem.add_Click({ if (Test-Path $DataLog) { Start-Process notepad.exe $DataLog } })
@@ -122,7 +160,7 @@ $tray.add_DoubleClick({ Start-Process (HubUrl) })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 10000
-$timer.add_Tick({ Refresh })
+$timer.add_Tick({ Refresh; if ($timer.Interval -ne 10000) { $timer.Interval = 10000 } })
 Log "tray started"
 Refresh
 $timer.Start()
