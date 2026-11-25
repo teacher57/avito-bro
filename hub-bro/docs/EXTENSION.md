@@ -112,7 +112,8 @@ ORDERS.md; после изменений обнови разделы и журн
 
 `window.postMessage` на странице кабинета — `https://hub-bro.vercel.app`, `https://taylormomsen.tailccfeb1.ts.net`
 (свой сервер по Tailscale, ARCHITECTURE.md) или `http://localhost:5173` (дев-сервер),
-только с того же окна и источника. Адреса перечислены в трёх местах: `manifest.json` (`host_permissions`,
+только с того же окна и источника. Адреса перечислены в трёх местах (добавить адрес нового клиента во все три — `node extension/set-hub.mjs https://адрес`;
+это же делает `avito/deploy.sh`): `manifest.json` (`host_permissions`,
 `content_scripts` для `hub.js`) и `HUB_URLS` в `background.js`. Маску `*.vercel.app` не ставим — пачки заказов
 уходили бы на любой чужой сайт на Vercel. Открыты и сайт, и localhost — пачка придёт в обе вкладки, на сервер её
 запишет сайт.
@@ -169,3 +170,5 @@ Store «по ссылке», чтобы обновлялось само.
   и `HUB_URLS`; инструкция установки и обновления с 0.1.0.
 - 25.11.2026 — версия 0.3.0: в `manifest.json` и `HUB_URLS` добавлен свой сервер `https://taylormomsen.tailccfeb1.ts.net`
   (Tailscale, ARCHITECTURE.md, «Свой сервер»). Обновить: заменить папку и нажать «Обновить» у расширения.
+- 25.11.2026 — `extension/set-hub.mjs`: добавляет адрес кабинета клиента во все три места; `deploy.sh` делает копию
+  расширения для каждого клиента со своим адресом.

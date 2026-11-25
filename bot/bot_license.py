@@ -6,7 +6,7 @@ One license = one device (user, 2026-11-25): a license is issued for the key AND
 from the Windows MachineGuid; the app shows it). The public list holds SHA-256 fingerprints of "key:device code",
 never the keys, so the same folder copied to another PC (another device code) does not match:
 
-    https://teacher57.github.io/bot-bro/licenses.json
+    https://teacher57.github.io/avito/licenses.json
     {"format": "bot-bro-licenses", "version": 2, "licenses": {"<sha256 of key:DEVICE-CODE>": {"until": "YYYY-MM-DD"}}}
 
 - key listed and `until` not passed  -> ok;
@@ -24,7 +24,7 @@ import uuid
 import urllib.request
 from pathlib import Path
 
-URL = "https://teacher57.github.io/bot-bro/licenses.json"
+URL = "https://teacher57.github.io/avito/licenses.json"
 GRACE_DAYS = 3
 CHECK_EVERY = 60 * 60          # seconds between checks while things are fine
 RETRY_EVERY = 5 * 60           # seconds between checks while the list is unreachable or the license is not ok
