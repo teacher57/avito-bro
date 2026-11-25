@@ -1,0 +1,6 @@
+{
+  // Кабинет (src/) и функции Vercel (api/) проверяются отдельно: у них разные окружения (браузер и Node).
+  // npx tsc -b проверяет оба.
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./api" }]
+}

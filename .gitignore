@@ -1,19 +1,18 @@
-# environments and installs (setup.cmd creates them on each PC)
-.venv/
-python/
-__pycache__/
+# avito-bro: секреты и данные клиентов в репозиторий не попадают (решение от 25.11.2026)
+.env
+.env.*
+**/access-key.txt
+data/store/
+licensing/
+**/live/
+**/manager-app/data/
+**/*.log
+.DS_Store
+# окружения и сборки
+**/.venv/
+bot/python/
+**/node_modules/
+hub-bro/web/dist/
+**/__pycache__/
 *.pyc
 *.lnk
-# secrets: never in git
-.env
-manager-app/data/
-# live state: chats, roles, logs; copied by hand when the bot moves
-live/
-prompt_history/
-.claude/
-# analysis-only data
-data/test100*
-data/train/cls_*
-# instructions and specs stay only on the admin's Mac (user, 2026-11-17)
-*.md
-!ROADMAP.md
