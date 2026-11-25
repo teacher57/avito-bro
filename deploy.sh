@@ -38,10 +38,12 @@ ok() { printf '   \033[32mok:\033[0m %s\n' "$*"; }
 plan() { printf '   \033[33mбудет:\033[0m %s\n' "$*"; }
 
 # PowerShell на компьютере клиента: скрипт передаётся в base64 (UTF-16LE) — никаких проблем с кавычками cmd.exe.
+# В начале: вывод в UTF-8 (иначе кириллица по SSH превращается в «????») и без индикаторов прогресса (иначе по SSH
+# приходит служебный «#< CLIXML …»).
 rps() {
-  local enc
-  enc=$(printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
-  "${SSH[@]}" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc" | tr -d '\r'
+  local enc pre='$ProgressPreference = "SilentlyContinue"; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8;'
+  enc=$(printf '%s\n%s' "$pre" "$1" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
+  "${SSH[@]}" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc" | tr -d '\r'
 }
 
 # ---------------------------------------------------------------- 1. что за компьютер
