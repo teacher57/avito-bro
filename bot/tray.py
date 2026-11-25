@@ -262,12 +262,23 @@ class Tray:
         self.start_bot()
 
     def quit(self):
-        if not confirm("Выключить бота? Он перестанет отвечать покупателям и слать уведомления, пока его снова не запустят."):
+        # The confirmation runs in its own thread: a modal dialog opened right in the menu callback runs on the icon's own
+        # (pystray) thread and froze on Windows — no clicks while the watch thread kept updating the icon (2026-11-25).
+        if getattr(self, "_asking", False):
             return
-        log("quit from the tray: stopping the bot")
-        self.quitting = True
-        self.stop_bot()
-        self.icon.stop()
+        self._asking = True
+        threading.Thread(target=self._quit_dialog, daemon=True).start()
+
+    def _quit_dialog(self):
+        try:
+            if not confirm("Выключить бота? Он перестанет отвечать покупателям и слать уведомления, пока его снова не запустят."):
+                return
+            log("quit from the tray: stopping the bot")
+            self.quitting = True
+            self.stop_bot()
+            on_ui(self.icon.stop)
+        finally:
+            self._asking = False
 
     def run(self):
         self.start_bot()
@@ -321,7 +332,8 @@ def confirm(text):
     try:
         if WIN:
             import ctypes
-            return ctypes.windll.user32.MessageBoxW(None, text, "Бот Авито", 0x04 | 0x30 | 0x40000) == 6  # YES/NO, warning, topmost
+            # YES/NO, warning, topmost, set foreground (else it may open behind other windows without focus)
+            return ctypes.windll.user32.MessageBoxW(None, text, "Бот Авито", 0x04 | 0x30 | 0x40000 | 0x10000) == 6
         r = subprocess.run(["osascript", "-e", f'display dialog "{text}" buttons {{"Отмена", "Выключить"}} '
                             'default button "Отмена" with title "Бот Авито" with icon caution'], capture_output=True, timeout=120)
         return "Выключить" in r.stdout.decode("utf-8", "replace")
