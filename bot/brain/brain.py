@@ -17,7 +17,7 @@ import numpy as np
 from scipy.sparse import hstack
 from fit import TABLES, compare, client_measures, size_by_measures
 import products as _products
-from products import PRODUCTS, BY_KEY, SIZE_LABEL, product_for_item, in_stock, out_sizes, hw_size, next_photo
+from products import PRODUCTS, BY_KEY, SIZE_LABEL, product_for_item, in_stock, in_sizes, out_sizes, hw_size, next_photo
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import NearestNeighbors
@@ -825,6 +825,10 @@ def go_ahead_once(reply, earlier):
 
 
 
+# a jeans size anywhere in a text: a two-digit number 20–59 that is not part of a longer number, price or height
+ANY_SIZE = re.compile(r"(?<![\d.,])([2-5]\d)(?![\d.,]|\s*(?:см|кг|₽|руб|р\b|лет|года|год|%))", re.I)
+
+
 def _sizes_ru(sizes):
     """[30] -> «30 размера», [30, 31] -> «30 и 31 размеров»."""
     s = [str(x) for x in sizes]
@@ -836,24 +840,43 @@ def size_guard(out, model, text, context=""):
     and says the size is temporarily out; «есть 30?» / «беру 30» about such a size -> it's out; «какие размеры есть?» ->
     names the missing ones. Works on the rule bot's and GPT's replies alike."""
     gone = set(out_sizes(model))
-    if not gone or not out.get("reply"):
+    have = in_sizes(model)  # None = sizes unknown (old behaviour); else ONLY these are in stock
+    if not out.get("reply"):
         return out
     reply = out["reply"]
-    recommended = {int(a or b) for a, b in REPLY_SIZE.findall(reply)} & gone
     order_q = is_stock(text) or can_order_q(text) or is_decided(text) or closes_deal(text, context)
-    named = set(sizes_in(text)) or ({stated_size(context)} - {None} if is_decided(text) or closes_deal(text, context) else set())
+    if have is not None:
+        # any two-digit size outside the in-stock list counts as not available — also one this model doesn't have
+        # at all (GPT once confirmed «29 есть» for a model with 23–25 only, 2026-11-25)
+        gone |= {n for n in (int(x) for x in ANY_SIZE.findall(text)) if n not in have} if order_q else set()
+        gone |= {n for n in (int(x) for x in ANY_SIZE.findall(reply)) if n not in have}
+    if not gone:
+        return out
+    recommended = ({int(a or b) for a, b in REPLY_SIZE.findall(reply)} |
+                   ({int(x) for x in ANY_SIZE.findall(reply)} if have is not None else set())) & gone
+    named = (set(sizes_in(text)) | ({int(x) for x in ANY_SIZE.findall(text)} if have is not None else set())) or \
+        ({stated_size(context)} - {None} if is_decided(text) or closes_deal(text, context) else set())
     asked = (named & gone) if order_q else set()  # «есть 30?», «беру 30», or «беру» right after the shop named a missing size
     why = lambda w: (out.get("why", "") + "; " + w).lstrip("; ")
     if asked or recommended:
         rest = GO_AHEAD.sub("", reply).replace(JUST_IN_CASE, "").strip()
         bad = sorted(asked | recommended)
+        # «временно» — только для размеров самой модели; размера, которого у модели нет вовсе, просто «нет»
+        never = have is not None and all(n not in (BY_KEY.get(model) or {}).get("sizes", []) for n in bad)
+        when = "сейчас нет" if never else "сейчас временно нет"
+        if have is not None and asked and {int(x) for x in ANY_SIZE.findall(reply)} & set(bad):
+            rest = ""  # GPT confirmed a size that isn't there («Да, 29 есть») — the whole reply goes, not just a note
         if asked or not rest:
-            note = f"К сожалению, {_sizes_ru(bad)} сейчас временно нет в наличии."
+            note = f"К сожалению, {_sizes_ru(bad)} {when} в наличии."
         else:
-            note = ("Но этого размера" if len(bad) == 1 else "Но " + _sizes_ru(bad)) + " сейчас временно нет в наличии."
-        return {**out, "reply": (rest + " " + note).strip(), "escalate": False, "why": why(f"size {bad} out of stock")}
+            note = ("Но этого размера" if len(bad) == 1 else "Но " + _sizes_ru(bad)) + f" {when} в наличии."
+        return {**out, "reply": (note if asked and not rest else (rest + " " + note)).strip(), "escalate": False,
+                "why": why(f"size {bad} out of stock")}
     listed = len(re.findall(rf"(?<!\d)(?:{_NUMS})(?!\d)", reply)) >= 3  # GPT listed sizes itself
     if is_stock(text) and not sizes_in(text) and not listed and "нет в наличии" not in reply.lower():  # «какие размеры есть?»
+        if have is not None:
+            return {**out, "reply": reply.rstrip() + " Сейчас в наличии: " + ", ".join(SIZE_LABEL.get(n, str(n)) for n in have) + ".",
+                    "why": why("listed in-stock sizes")}
         return {**out, "reply": reply.rstrip() + f" Сейчас нет в наличии только {_sizes_ru(sorted(gone))}.",
                 "why": why("listed missing sizes")}
     return out

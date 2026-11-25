@@ -6,7 +6,7 @@ import { applyDelivery, cancelDelivery } from "./delivery";
 // Действия экрана склада. Само состояние общее (shared/stock): его же читает и меняет комплектация.
 // Хранится в браузере и на сервере данных (catalog / stock / hub / log, см. shared/stock/store.ts).
 
-type SettingsPatch = Partial<Pick<StockState, "models" | "categories" | "display">>;
+type SettingsPatch = Partial<Pick<StockState, "models" | "categories" | "display" | "sizeScale">>;
 
 const setState = stockStore.set;
 

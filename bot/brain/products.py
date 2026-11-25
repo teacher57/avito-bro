@@ -133,6 +133,11 @@ def build(catalog, stock=None, shop=None):
             "id": p["id"], "name": p.get("name") or p["id"], "key": p.get("botKey") or p["id"],
             "match": [w.strip().lower() for w in p.get("match") or [] if w and w.strip()],
             "in_stock": in_stock, "out_sizes": out,
+            # the product's sizes in its own order and the ones in stock now (ints): GPT gets the in-stock list as is,
+            # the size guard treats any other size (also one the product doesn't have at all) as not available
+            "sizes": [n for n in (_int(s) for s in p.get("sizes") or []) if n is not None],
+            "in_sizes": [n for n in (_int(s) for s in p.get("sizes") or []) if n is not None and n not in out]
+                        if in_stock else [],
             "material": d.get("material") or None, "composition": d.get("composition") or None,
             "density": d.get("density") or None,
             "photos": photos,
@@ -237,6 +242,12 @@ def in_stock(model_key):
     """False only when the product is known and out of stock (warehouse shelf empty / «нет в наличии» / archived)."""
     p = BY_KEY.get(model_key)
     return True if p is None else p["in_stock"]
+
+
+def in_sizes(model_key):
+    """Sizes of this product in stock now (ints, product order); None = unknown product or a product without sizes."""
+    p = BY_KEY.get(model_key)
+    return list(p["in_sizes"]) if p and p.get("sizes") else None
 
 
 def out_sizes(model_key):

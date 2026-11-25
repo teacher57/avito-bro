@@ -3,17 +3,19 @@ import { Button, Input } from "@/shared/ui";
 import { CategorySettingsCard } from "../CategorySettingsCard/CategorySettingsCard";
 import { DisplaySettingsPanel } from "../DisplaySettingsPanel/DisplaySettingsPanel";
 import { ModelSettingsCard } from "../ModelSettingsCard/ModelSettingsCard";
+import { SizeScalePanel } from "../SizeScalePanel/SizeScalePanel";
 import { nameTaken } from "../settings";
 import { DEFAULT_THRESHOLDS, newCategoryId, newModel } from "@/shared/stock";
 import type { ChangeSettings } from "../store";
-import type { Category, DisplaySettings, Model } from "@/shared/stock";
+import type { Category, DisplaySettings, Model, SizeLabel } from "@/shared/stock";
 import styles from "./SettingsView.module.css";
 
-type Section = "models" | "categories" | "display";
+type Section = "models" | "categories" | "sizes" | "display";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "models", label: "Модели" },
   { id: "categories", label: "Категории" },
+  { id: "sizes", label: "Размеры" },
   { id: "display", label: "Отображение" },
 ];
 
@@ -21,11 +23,12 @@ type Props = {
   models: Model[];
   categories: Category[];
   display: DisplaySettings;
+  sizeScale: SizeLabel[];
   change: ChangeSettings;
 };
 
 /** Настройки склада. Права доступа пока не проверяем — менять может любой. */
-export function SettingsView({ models, categories, display, change }: Props) {
+export function SettingsView({ models, categories, display, sizeScale, change }: Props) {
   const [section, setSection] = useState<Section>("models");
 
   return (
@@ -50,13 +53,14 @@ export function SettingsView({ models, categories, display, change }: Props) {
           <ModelsSection models={models} categories={categories} change={change} onAddCategory={() => setSection("categories")} />
         )}
         {section === "categories" && <CategoriesSection models={models} categories={categories} change={change} />}
+        {section === "sizes" && <SizeScalePanel sizeScale={sizeScale} change={change} />}
         {section === "display" && <DisplaySettingsPanel display={display} change={change} />}
       </div>
     </div>
   );
 }
 
-function ModelsSection({ models, categories, change, onAddCategory }: Omit<Props, "display"> & { onAddCategory: () => void }) {
+function ModelsSection({ models, categories, change, onAddCategory }: Omit<Props, "display" | "sizeScale"> & { onAddCategory: () => void }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState(categories[0]?.id ?? "");
   const [showArchive, setShowArchive] = useState(false);
@@ -138,7 +142,7 @@ function ModelsSection({ models, categories, change, onAddCategory }: Omit<Props
   );
 }
 
-function CategoriesSection({ models, categories, change }: Omit<Props, "display">) {
+function CategoriesSection({ models, categories, change }: Omit<Props, "display" | "sizeScale">) {
   const [name, setName] = useState("");
   const problem = name.trim() && nameTaken(name, categories.map((c) => c.name)) ? "Такая категория уже есть" : null;
 

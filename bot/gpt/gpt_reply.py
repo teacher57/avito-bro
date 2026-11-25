@@ -404,9 +404,22 @@ OUT_OF_STOCK_LINE = ("- НАЛИЧИЕ: этой модели сейчас ВР�
 
 
 def stock_line(prod):
-    """The manager app's «в наличии» switch (no product = in stock, as before)."""
+    """What is in stock, for GPT. A product with sizes -> the exact in-stock list «23 (S), 24 (M)» and «no other sizes»
+    (before: «all from the table EXCEPT …» — with no size table GPT took any size as available, 2026-11-25).
+    No product = in stock, as before."""
     if prod and not prod.get("in_stock", True):
         return OUT_OF_STOCK_LINE
+    if prod and prod.get("sizes"):
+        have = prod.get("in_sizes") or []
+        if not have:
+            return OUT_OF_STOCK_LINE
+        label = lambda n: _products.SIZE_LABEL.get(n, str(n))
+        gone = [n for n in prod["sizes"] if n not in have]
+        return ("- РАЗМЕРЫ В НАЛИЧИИ — ТОЛЬКО ЭТИ: " + ", ".join(label(n) for n in have) + ". Других размеров этой модели "
+                "сейчас нет" + (f" (в том числе {', '.join(label(n) for n in gone)})" if gone else "") + ". Если покупатель "
+                "спрашивает или хочет размер не из этого списка — скажи, что такого размера нет в наличии; заказывать его "
+                "не предлагай и про отправку не говори. Другой размер вместо него сам не предлагай. Размер называй так же, "
+                "как в списке (число и буквы в скобках).")
     gone = (prod or {}).get("out_sizes") or []
     if gone:
         return ("- Размеры в наличии: все из таблицы ниже, КРОМЕ " + ", ".join(map(str, gone)) + " — этих размеров сейчас "
