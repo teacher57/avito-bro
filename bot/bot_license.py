@@ -26,8 +26,9 @@ from pathlib import Path
 
 URL = "https://teacher57.github.io/avito/licenses.json"
 GRACE_DAYS = 3
-CHECK_EVERY = 5 * 60           # seconds between checks while things are fine
-RETRY_EVERY = 5 * 60           # seconds between checks while the list is unreachable or the license is not ok
+CHECK_EVERY = 60 * 60          # seconds between checks while the license is confirmed (user, 2026-11-26: hourly)
+RETRY_EVERY = 60               # seconds between checks while there is no confirmed license (no key, not in the list,
+                               # expired) or the list is unreachable: every minute, so a new license is picked up fast
 STATE = Path(__file__).parent / "live" / "license.json"
 
 
@@ -114,7 +115,7 @@ def ok():
 
 
 def check(now=None, force=False):
-    """Re-check when due (every 5 min). Returns ok()."""
+    """Re-check when due (hourly with a confirmed license, every minute without). Returns ok()."""
     global _next
     now = now or time.time()
     if not force and now < _next:
