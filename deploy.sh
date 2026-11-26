@@ -108,6 +108,8 @@ rm -f "$PKG/deploy.sh"
 [ $BOT = 1 ] || rm -rf "$PKG/bot"
 [ $HUB = 1 ] || rm -rf "$PKG/hub-bro" "$PKG/open_hub.vbs" "$PKG/open_hub.ps1"
 if [ $HUB = 1 ]; then
+  # иконка ярлыка «HUB BRO» — та же, что у «BOT BRO» (берётся из кода бота на Mac, так что есть и при установке без бота)
+  cp "$SRC/bot/manager-app/assets/icon.ico" "$PKG/hub-bro/server/hub.ico"
   node "$PKG/hub-bro/extension/set-hub.mjs" "$HUB_URL" "$PKG/hub-bro/extension" >/dev/null
   ok "расширение: прописан адрес $HUB_URL"
   if [ $DRY = 1 ]; then
@@ -183,16 +185,7 @@ if (Get-ScheduledTask -TaskName HubBroServer -ErrorAction SilentlyContinue) {
   Unregister-ScheduledTask -TaskName HubBroServer -Confirm:\$false
   'старый автозапуск HubBroServer (SYSTEM) удалён'
 }
-# значок для ярлыка: зелёный кружок с белой H, как в трее
-Add-Type -AssemblyName System.Drawing
-\$ico = '$DEST\\hub-bro\\server\\hub.ico'
-\$bmp = New-Object System.Drawing.Bitmap 64, 64
-\$g = [System.Drawing.Graphics]::FromImage(\$bmp); \$g.SmoothingMode = 'AntiAlias'; \$g.TextRenderingHint = 'AntiAliasGridFit'
-\$g.FillEllipse((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(46, 125, 50))), 2, 2, 60, 60)
-\$font = New-Object System.Drawing.Font('Segoe UI', 30, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-\$fmt = New-Object System.Drawing.StringFormat; \$fmt.Alignment = 'Center'; \$fmt.LineAlignment = 'Center'
-\$g.DrawString('H', \$font, [System.Drawing.Brushes]::White, (New-Object System.Drawing.RectangleF(0, 2, 64, 64)), \$fmt); \$g.Dispose()
-\$fs = [IO.File]::Create(\$ico); [System.Drawing.Icon]::FromHandle(\$bmp.GetHicon()).Save(\$fs); \$fs.Close()
+\$ico = '$DEST\\hub-bro\\server\\hub.ico'   # иконка как у «BOT BRO» (положена в пакет на Mac)
 # ярлык «HUB BRO»: на рабочем столе и в папке avito
 foreach (\$dir in @([Environment]::GetFolderPath('Desktop'), '$DEST')) {
   \$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path \$dir 'HUB BRO.lnk'))
