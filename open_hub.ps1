@@ -6,7 +6,9 @@
 #   - значка HUB BRO в трее нет (закрыли) -> запустить hub-bro\server\hub-tray.vbs;
 #   - открыть кабинет: адрес компьютера в Tailscale (https://....ts.net), без Tailscale — http://127.0.0.1:8790.
 # Если хаб уже работает — сразу открывает кабинет. Лог ярлыка — hub-bro\server\open-hub.log.
+# -NoBrowser — всё то же, но кабинет не открывать (так хаб поднимает avito-start.ps1 после обновления).
 # Файл сохранён в UTF-8 с BOM: иначе Windows PowerShell 5.1 прочитает русский текст как «кракозябры».
+param([switch]$NoBrowser)
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 
@@ -44,5 +46,6 @@ $url = "http://127.0.0.1:8790"
 if (Test-Path $Ts) {
     try { $d = ((& $Ts status --json 2>$null | ConvertFrom-Json).Self.DNSName).TrimEnd("."); if ($d) { $url = "https://$d" } } catch {}
 }
+if ($NoBrowser) { Log "hub up, cabinet not opened (-NoBrowser)"; exit 0 }
 Log "open $url"
 Start-Process $url

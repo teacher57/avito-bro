@@ -107,6 +107,7 @@ EXT="$DEST\\HUB BRO extension"
 if [ $DRY = 1 ]; then
   say "Что будет сделано (--dry-run, ничего не менялось)"
   plan "скачать ветку $BRANCH с GitHub в $DEST (данные, токены, переписка не трогаются)"
+  [ "$(val INSTALLED)" = True ] && plan "обновление: остановить хаб, сервер данных$( [ $BOT = 1 ] && echo " и бота"), после — запустить то, что работало (ответы на Авито — как были)"
   [ "$(val KEY)" = True ] && ok "ключ доступа уже есть" || plan "создать ключ доступа data\\server\\access-key.txt"
   if [ $HUB = 1 ]; then
     [ "$(val STORE)" = True ] && ok "данные магазина уже есть" || plan "новый магазин $( [ -n "$SHOP" ] && echo "«$SHOP»" || echo "без названия (бот: «продавец на Авито»)" )"
@@ -126,13 +127,36 @@ fi
 
 # ---------------------------------------------------------------- 3. копирование
 say "Копирование на компьютер клиента"
+WAS_HUB=0 WAS_DATA=0 WAS_BOT=0 WAS_LIVE=0
 if [ "$(val INSTALLED)" = True ]; then
-  # обновление: остановить хаб и сервер данных (их запустит заново ярлык «HUB BRO» или «BOT BRO»)
-  rps "
-schtasks /End /TN HubBroServer 2>\$null | Out-Null
-Get-CimInstance Win32_Process -Filter \"name='node.exe'\" | Where-Object { \$_.CommandLine -match 'server\\\\server\\.mjs' } |
-  ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
-" >/dev/null || true
+  # обновление: запомнить, что работало (после обновления запустится только оно), и остановить хаб, сервер данных и
+  # бота (если ставим бота). Приложение BOT BRO не трогаем.
+  STOP_PS=$(cat <<'PS'
+$A = '__DEST__'
+$hub = [bool](Get-NetTCPConnection -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue)
+$data = [bool](Get-NetTCPConnection -LocalPort 8791 -State Listen -ErrorAction SilentlyContinue)
+$bot = $false; $live = $false
+try {
+  $d = Get-Content "$A\bot\live\app_status.json" -Raw -ErrorAction Stop | ConvertFrom-Json
+  $bot = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$d.t) -lt 30   # свежий сигнал бота = работает
+  $live = $bot -and [bool]$d.live_on
+} catch {}
+"WAS hub=$([int]$hub) data=$([int]$data) bot=$([int]$bot) live=$([int]$live)"
+schtasks /End /TN HubBroServer 2>$null | Out-Null
+if (__BOT__ -eq 1) {
+  Stop-ScheduledTask -TaskName AvitoBot -ErrorAction SilentlyContinue
+  $esc = [regex]::Escape("$A\bot")
+  Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -match $esc -or $_.ExecutablePath -match $esc) -and $_.CommandLine -match 'tray\.py|manager\.py|run_manager\.cmd' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+Get-CimInstance Win32_Process -Filter "name='node.exe'" | Where-Object { $_.CommandLine -match 'server\\server\.mjs' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+PS
+)
+  STOP_PS=${STOP_PS//__DEST__/$DEST}; STOP_PS=${STOP_PS//__BOT__/$BOT}
+  WAS=$(rps "$STOP_PS" | grep '^WAS ' || true)
+  for kv in ${WAS#WAS }; do case $kv in hub=1) WAS_HUB=1 ;; data=1) WAS_DATA=1 ;; bot=1) WAS_BOT=1 ;; live=1) WAS_LIVE=1 ;; esac; done
+  echo "   до обновления: хаб $( [ $WAS_HUB = 1 ] && echo работал || echo выключен ), бот $( [ $WAS_BOT = 1 ] && { [ $WAS_LIVE = 1 ] && echo "работал, отвечал на Авито" || echo "работал, ответы выключены"; } || echo "не работал" ) — остановлено"
 fi
 rps "
 \$ErrorActionPreference = 'Stop'
@@ -165,6 +189,12 @@ if (-not (Test-Path 'data\\server\\access-key.txt')) {
   node -e \"require('fs').writeFileSync('data/server/access-key.txt', require('crypto').randomBytes(24).toString('base64url'))\"
   'ключ доступа создан'
 } else { 'ключ доступа уже есть' }
+# задача AvitoStart: по запросу запускает хаб / сервер данных в сеансе пользователя (после обновления, см. avito-start.ps1)
+\$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+\$act = New-ScheduledTaskAction -Execute \"\$env:WINDIR\\System32\\wscript.exe\" -Argument '\"$DEST\\avito-start.vbs\"'
+\$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+\$prn = New-ScheduledTaskPrincipal -UserId \$me -LogonType Interactive
+Register-ScheduledTask -TaskName AvitoStart -Action \$act -Settings \$set -Principal \$prn -Force | Out-Null
 # новый магазин (и для бота: его название бот называет покупателям, время отправки — отсюда же)
 if (-not (Test-Path 'data\\store\\shop.json')) {
   New-Item -ItemType Directory -Force data\\store | Out-Null
@@ -234,6 +264,59 @@ if [ $BOT = 1 ]; then
   say "BOT BRO (Python и окружения — только если их нет)"
   "${SSH[@]}" "powershell -NoProfile -ExecutionPolicy Bypass -File \"$DEST\\bot\\setup.ps1\"" 2>&1 | tr -d '\r' | sed 's/^/   /' || {
     echo "   setup.ps1 завершился с ошибкой — см. текст выше"; exit 1; }
+fi
+
+# ---------------------------------------------------------------- 7. перезапуск после обновления
+if [ "$(val INSTALLED)" = True ] && { [ $WAS_HUB = 1 ] || [ $WAS_DATA = 1 ] || [ $WAS_BOT = 1 ]; }; then
+  say "Перезапуск того, что работало до обновления"
+  START_PS=$(cat <<'PS'
+$A = '__DEST__'; $hub = __HUB__; $data = __DATA__; $bot = __BOTRUN__; $live = __LIVE__
+function Listening($port) { [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) }
+if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) {
+  "никто не вошёл в Windows: хаб и бот запустятся, когда войдут (ярлыки «HUB BRO» и «BOT BRO»)"; exit 0
+}
+$want = @(); if ($hub) { $want += 'hub' }; if ($data -and -not $hub) { $want += 'data' }
+if ($want) {
+  Set-Content -Path "$A\.start-request" -Value ($want -join ',') -Encoding ASCII
+  Start-ScheduledTask -TaskName AvitoStart
+  $port = if ($hub) { 8790 } else { 8791 }
+  for ($i = 0; $i -lt 60 -and -not (Listening $port); $i++) { Start-Sleep -Milliseconds 500 }
+  if ($hub) { "хаб: $(if (Listening 8790) { 'запущен' } else { 'НЕ запустился — ярлык «HUB BRO», лог hub-bro\server\server.log' })" }
+  else { "сервер данных: $(if (Listening 8791) { 'запущен' } else { 'НЕ запустился' })" }
+}
+if ($bot) {
+  $st = "$A\bot\live\app_status.json"
+  $t0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  Start-ScheduledTask -TaskName AvitoBot
+  $up = $false
+  for ($i = 0; $i -lt 75 -and -not $up; $i++) {
+    Start-Sleep -Seconds 2
+    try { $up = [double]((Get-Content $st -Raw -ErrorAction Stop | ConvertFrom-Json).t) -ge $t0 } catch {}
+  }
+  if (-not $up) { "бот: НЕ запустился за 2,5 минуты — BOT BRO → «Бот» → «Перезапустить программу бота»"; exit 0 }
+  if (-not $live) { "бот: запущен, ответы на Авито выключены (как были)"; exit 0 }
+  # включить ответы, как кнопка «Включить» в BOT BRO (botctl.send): бот проверит лицензию и применит в течение секунд
+  $id = [guid]::NewGuid().ToString('N')
+  $cmd = @{ id = $id; action = 'start'; by = 'обновление (deploy.sh)'; t = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText("$A\bot\live\app_control.json.tmp", $cmd, (New-Object Text.UTF8Encoding($false)))
+  Move-Item "$A\bot\live\app_control.json.tmp" "$A\bot\live\app_control.json" -Force
+  $s = $null
+  for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    try { $s = Get-Content $st -Raw -ErrorAction Stop | ConvertFrom-Json; if ($s.seen -eq $id) { break } } catch {}
+  }
+  if ($s -and $s.seen -eq $id -and $s.live_on) { "бот: запущен, ответы на Авито снова включены" }
+  elseif ($s -and $s.seen -eq $id) { "бот: запущен, но ответы НЕ включились (лицензия?) — подробности админам в Telegram" }
+  else { "бот: запущен, ответы ещё не включены — BOT BRO → «Включить»" }
+}
+PS
+)
+  START_PS=${START_PS//__DEST__/$DEST}
+  START_PS=${START_PS//__HUB__/$( [ $HUB = 1 ] && [ $WAS_HUB = 1 ] && echo '$true' || echo '$false' )}
+  START_PS=${START_PS//__DATA__/$( [ $WAS_DATA = 1 ] && echo '$true' || echo '$false' )}
+  START_PS=${START_PS//__BOTRUN__/$( [ $BOT = 1 ] && [ $WAS_BOT = 1 ] && echo '$true' || echo '$false' )}
+  START_PS=${START_PS//__LIVE__/$( [ $WAS_LIVE = 1 ] && echo '$true' || echo '$false' )}
+  rps "$START_PS" | sed 's/^/   /'
 fi
 
 # ---------------------------------------------------------------- итог
