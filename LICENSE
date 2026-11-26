@@ -1,0 +1,17 @@
+BOT BRO / HUB BRO — source-available license
+
+Copyright (c) 2026 teacher57. All rights reserved.
+
+The source code in this repository is published so that it can be read and reviewed. It is NOT open source.
+
+1. You may read this code and install it only on a computer that holds a valid BOT BRO license issued by the
+   copyright holder (the license list the bot checks at https://teacher57.github.io/avito/licenses.json).
+2. You may not use, run, copy, modify, distribute, sublicense or sell this code, or any part of it, in any other
+   way without the copyright holder's prior written permission.
+3. You may not remove, disable, bypass or alter the license check or any other protection in this code, and you may
+   not run a modified copy that does so.
+4. The HUB BRO cabinet (hub-bro/) includes code written by SimkaDV and is published here with his permission under
+   the same terms.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.

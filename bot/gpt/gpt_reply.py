@@ -79,7 +79,7 @@ ORDER_TOOL = {"type": "function", "function": {
         "required": [], "additionalProperties": False}}}
 TOOLS.append(ORDER_TOOL)
 
-PROMPT = """Ты — продавец магазина {shop} на Авито, переписываешься с покупателем в чате объявления.
+PROMPT = """Ты — {shop}, переписываешься с покупателем в чате объявления.
 Пиши как живой человек-продавец, а не как бот или оператор колл-центра.
 
 КАК ПИСАТЬ
@@ -242,7 +242,8 @@ DEFAULT_PROMPT = PROMPT + STYLE_EXAMPLES + "\n\n{ship}"
 INSERT = re.compile(r"\{([a-z_]+)\}")
 # name -> (short title, where the value comes from); the manager app shows this list next to the prompt
 INSERTS = {
-    "shop": ("Название магазина", "Название, которое указали при установке (deploy.sh --shop-name, shop.json)."),
+    "shop": ("Кто ты (магазин)", "«продавец магазина <название> на Авито», если название указали при установке "
+                                 "(deploy.sh --shop-name, shop.json); без названия — «продавец на Авито»."),
     "title": ("Название товара", "Заголовок объявления, из которого пишет покупатель."),
     "price": ("Цена", "Цена из объявления (обновляется каждые 10 секунд). Если Авито дало покупателю свою скидку, "
                       "здесь цена со скидкой и подсказка назвать её."),
@@ -283,7 +284,7 @@ def fill(template, values):
 def insert_values(title, price, msgs, now=None, prod=None):
     prod = prod or product_for_item(title)
     return {
-        "shop": shop_name() or "на Авито", "title": title or "?", "price": price_text(price, msgs),
+        "shop": f"продавец магазина {shop_name()} на Авито" if shop_name() else "продавец на Авито", "title": title or "?", "price": price_text(price, msgs),
         "material": (prod or {}).get("material") or "нет данных",
         "composition": (prod or {}).get("composition") or "нет данных",
         "density": (prod or {}).get("density") or "нет данных", "table": table_text(prod), "size_hint": size_hint(prod, msgs),

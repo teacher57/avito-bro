@@ -3,26 +3,32 @@
 # Перед этим у клиента один раз: prepare.ps1 (Tailscale, SSH с ключом этого Mac, Node.js) — он и печатает строку
 # для запуска этого скрипта.
 #
-#   ./deploy.sh <пользователь>@<адрес> --bot --hub [--shop-name "Название"] [--dry-run]
+#   bash <(curl -fsSL https://raw.githubusercontent.com/teacher57/avito-bro/unstable/deploy.sh) \
+#        <пользователь>@<адрес> --bot --hub [--shop-name "Название"] [--branch unstable] [--dry-run]
+#
+# Код на Mac не нужен: компьютер клиента сам скачивает ветку открытого репозитория teacher57/avito-bro с GitHub и сам
+# собирает кабинет (npm). С Mac — только команды по SSH.
 #
 #   <адрес>       IP в Tailscale (100.x.y.z) или имя компьютера в Tailscale
 #   --bot         поставить бота и приложение BOT BRO (Python ставится, только если его нет)
 #   --hub         поставить кабинет HUB BRO (ярлык «HUB BRO», значок в трее, https-адрес в Tailscale, расширение Chrome)
-#   --shop-name   название нового магазина: его называет покупателям бот (по умолчанию — имя компьютера)
+#   --shop-name   название нового магазина: бот говорит «продавец магазина <название>»; без него — «продавец на Авито»
+#   --branch      какую ветку ставить (по умолчанию unstable)
 #   --dry-run     только узнать всё о компьютере и показать, что будет сделано; ничего не менять
 #
 # Повторный запуск = обновление кода: данные магазина (data\store), токены и PIN (bot\manager-app\data), переписка бота
-# (bot\live), ключ доступа и уже установленный Python не трогаются. Код берётся из папки, где лежит этот скрипт.
+# (bot\live), ключ доступа и уже установленный Python не трогаются.
 set -euo pipefail
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="" BOT=0 HUB=0 DRY=0 SHOP=""
+REPO="teacher57/avito-bro"
+TARGET="" BOT=0 HUB=0 DRY=0 SHOP="" BRANCH="unstable"
 while [ $# -gt 0 ]; do
   case "$1" in
     --bot) BOT=1 ;;
     --hub) HUB=1 ;;
     --dry-run) DRY=1 ;;
     --shop-name) SHOP="${2:-}"; shift ;;
+    --branch) BRANCH="${2:-}"; shift ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *@*) TARGET="$1" ;;
     *) echo "непонятный параметр: $1 (см. ./deploy.sh --help)"; exit 2 ;;
@@ -90,51 +96,26 @@ echo "   avito:     $( [ "$(val INSTALLED)" = True ] && echo "уже стоит 
 [ -n "$NODEV" ] || { echo "   нет Node.js — запустите prepare.ps1 у клиента"; exit 1; }
 if [ $HUB = 1 ] && [ -z "$DNS" ]; then echo "   нет адреса Tailscale — запустите prepare.ps1 у клиента"; exit 1; fi
 HUB_URL="https://$DNS"
-[ -n "$SHOP" ] || SHOP="$COMPUTER"
 
-# ---------------------------------------------------------------- 2. пакет кода на Mac
-say "Пакет кода"
-WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
-PKG="$WORK/avito"; mkdir -p "$PKG"
-rsync -a --exclude='.git' --exclude='.venv' --exclude='live' --exclude='python' --exclude='__pycache__' --exclude='*.pyc' \
-  --exclude='manager-app/data' --exclude='.env' --exclude='.env.*' --exclude='node_modules' --exclude='web/dist' \
-  --exclude='data/store' --exclude='access-key.txt' --exclude='*.log' --exclude='licensing' --exclude='clients' \
-  --exclude='.DS_Store' --exclude='*.lnk' --exclude='*.md' --exclude='hub-bro/data' --include='*/' "$SRC/" "$PKG/"
-# документы хаба и формата данных нужны и на месте; инструкции бота и INSTALL.md — только на Mac
-for d in hub-bro/docs data/schema data/server data/design; do
-  [ -d "$SRC/$d" ] && rsync -a --include='*/' --include='*.md' --exclude='*' "$SRC/$d/" "$PKG/$d/"
-done
-rm -f "$PKG/deploy.sh"
-[ $BOT = 1 ] || rm -rf "$PKG/bot"
-[ $HUB = 1 ] || rm -rf "$PKG/hub-bro" "$PKG/open_hub.vbs" "$PKG/open_hub.ps1"
-if [ $HUB = 1 ]; then
-  # иконка ярлыка «HUB BRO» — та же, что у «BOT BRO» (берётся из кода бота на Mac, так что есть и при установке без бота)
-  cp "$SRC/bot/manager-app/assets/icon.ico" "$PKG/hub-bro/server/hub.ico"
-  node "$PKG/hub-bro/extension/set-hub.mjs" "$HUB_URL" "$PKG/hub-bro/extension" >/dev/null
-  ok "расширение: прописан адрес $HUB_URL"
-  if [ $DRY = 1 ]; then
-    plan "собрать кабинет (npm run build)"
-  else
-    ( cd "$SRC/hub-bro/web" && { [ -d node_modules ] || npm ci --no-audit --no-fund >/dev/null; } && npm run build >/dev/null )
-    cp -R "$SRC/hub-bro/web/dist" "$PKG/hub-bro/web/dist"
-    ok "кабинет собран"
-  fi
-  CLIENT_EXT="$SRC/clients/${COMPUTER:-client}/extension"
-fi
-( cd "$WORK" && COPYFILE_DISABLE=1 tar -czf avito.tgz avito )
-ok "пакет: $(du -h "$WORK/avito.tgz" | cut -f1) ($( [ $BOT = 1 ] && echo "бот " )$( [ $HUB = 1 ] && echo "хаб " )+ сервер данных)"
+# ---------------------------------------------------------------- 2. код на GitHub
+say "Код"
+CODE_URL="https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH"
+curl -fsI --max-time 20 "$CODE_URL" >/dev/null || { echo "   ветки $BRANCH нет в $REPO (или GitHub недоступен)"; exit 1; }
+ok "ветка $BRANCH: $REPO — её скачает компьютер клиента"
+EXT="$DEST\\HUB BRO extension"
 
 if [ $DRY = 1 ]; then
   say "Что будет сделано (--dry-run, ничего не менялось)"
-  plan "скопировать код в $DEST (данные, токены, переписка не трогаются)"
+  plan "скачать ветку $BRANCH с GitHub в $DEST (данные, токены, переписка не трогаются)"
   [ "$(val KEY)" = True ] && ok "ключ доступа уже есть" || plan "создать ключ доступа data\\server\\access-key.txt"
   if [ $HUB = 1 ]; then
-    [ "$(val STORE)" = True ] && ok "данные магазина уже есть" || plan "новый магазин «$SHOP», наличие со склада"
+    [ "$(val STORE)" = True ] && ok "данные магазина уже есть" || plan "новый магазин $( [ -n "$SHOP" ] && echo "«$SHOP»" || echo "без названия (бот: «продавец на Авито»)" )"
     [ "$(val TASK)" = True ] && plan "удалить старый автозапуск HubBroServer (SYSTEM): хаб теперь от имени пользователя, по ярлыку"
     plan "ярлык «HUB BRO» на рабочем столе и в $DEST (поднять хаб, вернуть значок, открыть кабинет)"
     [ "$(val SERVE)" = yes ] && ok "https-адрес $HUB_URL уже настроен" || plan "https-адрес $HUB_URL (tailscale serve)"
     plan "значок HUB BRO в трее (задача HubBroTray, при входе в Windows)"
-    plan "расширение для клиента: $CLIENT_EXT"
+    plan "собрать кабинет у клиента (npm ci, npm run build)"
+    plan "расширение с адресом $HUB_URL: $EXT"
   fi
   if [ $BOT = 1 ]; then
     [ "$(val PY)" = True ] && ok "Python для бота уже стоит" || plan "поставить Python в папку бота"
@@ -153,14 +134,31 @@ Get-CimInstance Win32_Process -Filter \"name='node.exe'\" | Where-Object { \$_.C
   ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
 " >/dev/null || true
 fi
-"${SSH[@]}" "if not exist \"$DEST\" mkdir \"$DEST\"" >/dev/null
-scp -q -o BatchMode=yes -o LogLevel=ERROR "$WORK/avito.tgz" "$TARGET:$DEST_SCP/avito.tgz"
-"${SSH[@]}" "cd /d \"$DEST\\..\" && tar -xzf avito\\avito.tgz && del avito\\avito.tgz" >/dev/null
-ok "код в $DEST"
+rps "
+\$ErrorActionPreference = 'Stop'
+\$dest = '$DEST'
+\$tmp = Join-Path (Split-Path \$dest) '.avito-download'   # рядом с папкой avito (не в TEMP)
+if (Test-Path \$tmp) { Remove-Item \$tmp -Recurse -Force }
+New-Item -ItemType Directory -Force \$tmp | Out-Null
+& curl.exe -fsSL -o \"\$tmp\\src.tgz\" '$CODE_URL'
+if (\$LASTEXITCODE) { throw 'не удалось скачать код с GitHub' }
+& tar.exe -xzf \"\$tmp\\src.tgz\" -C \$tmp
+\$src = (Get-ChildItem \$tmp -Directory | Select-Object -First 1).FullName
+Remove-Item \"\$src\\deploy.sh\" -Force -ErrorAction SilentlyContinue
+if ($HUB -eq 1) { Copy-Item \"\$src\\bot\\manager-app\\assets\\icon.ico\" \"\$src\\hub-bro\\server\\hub.ico\" }  # иконка ярлыка HUB BRO
+if ($BOT -ne 1) { Remove-Item \"\$src\\bot\" -Recurse -Force }
+if ($HUB -ne 1) { Remove-Item \"\$src\\hub-bro\", \"\$src\\open_hub.vbs\", \"\$src\\open_hub.ps1\" -Recurse -Force }
+New-Item -ItemType Directory -Force \$dest | Out-Null
+& robocopy.exe \$src \$dest /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if (\$LASTEXITCODE -ge 8) { throw \"robocopy: код \$LASTEXITCODE\" }
+Remove-Item \$tmp -Recurse -Force
+\"код ветки $BRANCH в \$dest\"
+" | sed 's/^/   /'
+
 
 # ---------------------------------------------------------------- 4. сервер данных
 say "Сервер данных"
-SHOP_JSON=$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$SHOP")
+SHOP_B64=$(printf '%s' "$SHOP" | base64 | tr -d '\n')   # название как есть (кириллица, кавычки), без node на Mac
 rps "
 Set-Location '$DEST'
 if (-not (Test-Path 'data\\server\\access-key.txt')) {
@@ -171,7 +169,7 @@ if (-not (Test-Path 'data\\server\\access-key.txt')) {
 if (-not (Test-Path 'data\\store\\shop.json')) {
   New-Item -ItemType Directory -Force data\\store | Out-Null
   \$src = if ($HUB -eq 1) { 'warehouse' } else { 'manual' }
-  \$shop = @{ format='shop'; version=1; name=$SHOP_JSON; stockSource=\$src; cutoffs=@{ weekday='19:00'; weekend='18:00' };
+  \$shop = @{ format='shop'; version=1; name=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$SHOP_B64')); stockSource=\$src; cutoffs=@{ weekday='19:00'; weekend='18:00' };
              serviceOrder=@('yandex','avito','cdek','post','fivepost','dpd') } | ConvertTo-Json -Depth 3
   [IO.File]::WriteAllText(\"\$PWD\\data\\store\\shop.json\", \$shop)
   \"новый магазин «\$((\$shop | ConvertFrom-Json).name)»: наличие \$(if (\$src -eq 'warehouse') { 'со склада' } else { 'из BOT BRO' })\"
@@ -212,8 +210,21 @@ Register-ScheduledTask -TaskName HubBroTray -Action \$act -Trigger \$trg -Settin
 Start-ScheduledTask -TaskName HubBroTray
 'значок HUB BRO в трее: при входе в Windows (задача HubBroTray), запущен'
 " | sed 's/^/   /'
-  mkdir -p "$(dirname "$CLIENT_EXT")"; rm -rf "$CLIENT_EXT"; cp -R "$PKG/hub-bro/extension" "$CLIENT_EXT"
-  ok "расширение для клиента: $CLIENT_EXT (и у клиента: $DEST\\hub-bro\\extension)"
+  echo "   сборка кабинета у клиента (npm, 1–3 минуты)…"
+  rps "
+\$ErrorActionPreference = 'Stop'
+Set-Location '$DEST\\hub-bro\\web'
+\$log = & npm.cmd ci --no-audit --no-fund 2>&1
+if (\$LASTEXITCODE) { \$log | Select-Object -Last 15; throw 'npm ci не прошёл' }
+\$log = & npm.cmd run build 2>&1
+if (\$LASTEXITCODE) { \$log | Select-Object -Last 15; throw 'сборка кабинета не прошла' }
+'кабинет собран'
+\$ext = '$EXT'
+if (Test-Path \$ext) { Remove-Item \$ext -Recurse -Force }
+Copy-Item '$DEST\\hub-bro\\extension' \$ext -Recurse
+& node '$DEST\\hub-bro\\extension\\set-hub.mjs' '$HUB_URL' \$ext | Out-Null
+\"расширение с адресом кабинета: \$ext\"
+" | sed 's/^/   /'
   echo "   хаб сам не стартует: его поднимает ярлык «HUB BRO» у клиента (по SSH запущенный хаб умер бы вместе с сеансом)"
 fi
 
@@ -230,7 +241,7 @@ n=1
 if [ $HUB = 1 ]; then
   echo "   $n. У клиента: ярлык «HUB BRO» на рабочем столе → хаб запустится и откроется кабинет"; n=$((n+1))
   echo "   $n. Кабинет: $HUB_URL — ключ доступа: ssh $TARGET \"type $DEST\\data\\server\\access-key.txt\""; n=$((n+1))
-  echo "   $n. Расширение Chrome: папку $CLIENT_EXT → chrome://extensions → «Загрузить распакованное»"; n=$((n+1))
+  echo "   $n. Расширение Chrome у клиента: chrome://extensions → «Загрузить распакованное» → $EXT"; n=$((n+1))
 fi
 if [ $BOT = 1 ]; then
   echo "   $n. У клиента: ярлык «BOT BRO» → первая настройка (PIN и токены) → прислать код устройства"; n=$((n+1))
