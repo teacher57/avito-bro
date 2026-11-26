@@ -7,7 +7,7 @@
 #
 #   <адрес>       IP в Tailscale (100.x.y.z) или имя компьютера в Tailscale
 #   --bot         поставить бота и приложение BOT BRO (Python ставится, только если его нет)
-#   --hub         поставить кабинет HUB BRO (автозапуск, https-адрес в Tailscale, расширение Chrome с адресом клиента)
+#   --hub         поставить кабинет HUB BRO (ярлык «HUB BRO», значок в трее, https-адрес в Tailscale, расширение Chrome)
 #   --shop-name   название магазина для нового магазина (по умолчанию — имя компьютера)
 #   --dry-run     только узнать всё о компьютере и показать, что будет сделано; ничего не менять
 #
@@ -106,7 +106,7 @@ for d in hub-bro/docs data/schema data/server data/design; do
 done
 rm -f "$PKG/deploy.sh"
 [ $BOT = 1 ] || rm -rf "$PKG/bot"
-[ $HUB = 1 ] || rm -rf "$PKG/hub-bro"
+[ $HUB = 1 ] || rm -rf "$PKG/hub-bro" "$PKG/open_hub.vbs" "$PKG/open_hub.ps1"
 if [ $HUB = 1 ]; then
   node "$PKG/hub-bro/extension/set-hub.mjs" "$HUB_URL" "$PKG/hub-bro/extension" >/dev/null
   ok "расширение: прописан адрес $HUB_URL"
@@ -128,7 +128,8 @@ if [ $DRY = 1 ]; then
   [ "$(val KEY)" = True ] && ok "ключ доступа уже есть" || plan "создать ключ доступа data\\server\\access-key.txt"
   if [ $HUB = 1 ]; then
     [ "$(val STORE)" = True ] && ok "данные магазина уже есть" || plan "новый магазин «$SHOP», наличие со склада"
-    [ "$(val TASK)" = True ] && ok "автозапуск HubBroServer уже есть (будет перезапущен)" || plan "автозапуск HubBroServer"
+    [ "$(val TASK)" = True ] && plan "удалить старый автозапуск HubBroServer (SYSTEM): хаб теперь от имени пользователя, по ярлыку"
+    plan "ярлык «HUB BRO» на рабочем столе и в $DEST (поднять хаб, вернуть значок, открыть кабинет)"
     [ "$(val SERVE)" = yes ] && ok "https-адрес $HUB_URL уже настроен" || plan "https-адрес $HUB_URL (tailscale serve)"
     plan "значок HUB BRO в трее (задача HubBroTray, при входе в Windows)"
     plan "расширение для клиента: $CLIENT_EXT"
@@ -143,7 +144,7 @@ fi
 # ---------------------------------------------------------------- 3. копирование
 say "Копирование на компьютер клиента"
 if [ "$(val INSTALLED)" = True ]; then
-  # обновление: остановить хаб и сервер данных (их запустит заново автозапуск ниже или ярлык BOT BRO)
+  # обновление: остановить хаб и сервер данных (их запустит заново ярлык «HUB BRO» или «BOT BRO»)
   rps "
 schtasks /End /TN HubBroServer 2>\$null | Out-Null
 Get-CimInstance Win32_Process -Filter \"name='node.exe'\" | Where-Object { \$_.CommandLine -match 'server\\\\server\\.mjs' } |
@@ -177,10 +178,32 @@ if ($HUB -eq 1 -and -not (Test-Path 'data\\store\\shop.json')) {
 if [ $HUB = 1 ]; then
   say "HUB BRO"
   rps "
-\$run = '$DEST\\hub-bro\\server\\run-server.cmd'
-schtasks /Create /TN HubBroServer /TR \"\`\"\$run\`\"\" /SC ONSTART /RU SYSTEM /F | Out-Null
-schtasks /Run /TN HubBroServer | Out-Null
-'автозапуск HubBroServer: создан и запущен'
+# хаб работает от имени пользователя и стартует по ярлыку «HUB BRO»; старый автозапуск от SYSTEM (прошлые версии) — убрать
+if (Get-ScheduledTask -TaskName HubBroServer -ErrorAction SilentlyContinue) {
+  Unregister-ScheduledTask -TaskName HubBroServer -Confirm:\$false
+  'старый автозапуск HubBroServer (SYSTEM) удалён'
+}
+# значок для ярлыка: зелёный кружок с белой H, как в трее
+Add-Type -AssemblyName System.Drawing
+\$ico = '$DEST\\hub-bro\\server\\hub.ico'
+\$bmp = New-Object System.Drawing.Bitmap 64, 64
+\$g = [System.Drawing.Graphics]::FromImage(\$bmp); \$g.SmoothingMode = 'AntiAlias'; \$g.TextRenderingHint = 'AntiAliasGridFit'
+\$g.FillEllipse((New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(46, 125, 50))), 2, 2, 60, 60)
+\$font = New-Object System.Drawing.Font('Segoe UI', 30, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+\$fmt = New-Object System.Drawing.StringFormat; \$fmt.Alignment = 'Center'; \$fmt.LineAlignment = 'Center'
+\$g.DrawString('H', \$font, [System.Drawing.Brushes]::White, (New-Object System.Drawing.RectangleF(0, 2, 64, 64)), \$fmt); \$g.Dispose()
+\$fs = [IO.File]::Create(\$ico); [System.Drawing.Icon]::FromHandle(\$bmp.GetHicon()).Save(\$fs); \$fs.Close()
+# ярлык «HUB BRO»: на рабочем столе и в папке avito
+foreach (\$dir in @([Environment]::GetFolderPath('Desktop'), '$DEST')) {
+  \$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path \$dir 'HUB BRO.lnk'))
+  \$lnk.TargetPath = \"\$env:WINDIR\\System32\\wscript.exe\"
+  \$lnk.Arguments = '\"$DEST\\open_hub.vbs\"'
+  \$lnk.WorkingDirectory = '$DEST'
+  \$lnk.IconLocation = \"\$ico,0\"
+  \$lnk.Description = 'HUB BRO: start the hub and open the cabinet'
+  \$lnk.Save()
+}
+'ярлык «HUB BRO»: на рабочем столе и в папке avito'
 \$ts = \"\$env:ProgramFiles\\Tailscale\\tailscale.exe\"
 if (((& \$ts serve status 2>\$null) -join ' ') -match '127.0.0.1:8790') { 'https-адрес уже настроен' }
 else { & \$ts serve --bg 8790 | Out-Null; 'https-адрес настроен' }
@@ -196,9 +219,7 @@ Start-ScheduledTask -TaskName HubBroTray
 " | sed 's/^/   /'
   mkdir -p "$(dirname "$CLIENT_EXT")"; rm -rf "$CLIENT_EXT"; cp -R "$PKG/hub-bro/extension" "$CLIENT_EXT"
   ok "расширение для клиента: $CLIENT_EXT (и у клиента: $DEST\\hub-bro\\extension)"
-  sleep 4
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$HUB_URL/" || true)
-  [ "$code" = 200 ] && ok "кабинет открывается: $HUB_URL" || echo "   кабинет пока отвечает $code — подождите минуту и откройте $HUB_URL"
+  echo "   хаб сам не стартует: его поднимает ярлык «HUB BRO» у клиента (по SSH запущенный хаб умер бы вместе с сеансом)"
 fi
 
 # ---------------------------------------------------------------- 6. бот
@@ -212,6 +233,7 @@ fi
 say "Готово. Осталось руками"
 n=1
 if [ $HUB = 1 ]; then
+  echo "   $n. У клиента: ярлык «HUB BRO» на рабочем столе → хаб запустится и откроется кабинет"; n=$((n+1))
   echo "   $n. Кабинет: $HUB_URL — ключ доступа: ssh $TARGET \"type $DEST\\data\\server\\access-key.txt\""; n=$((n+1))
   echo "   $n. Расширение Chrome: папку $CLIENT_EXT → chrome://extensions → «Загрузить распакованное»"; n=$((n+1))
 fi

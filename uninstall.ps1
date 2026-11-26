@@ -7,7 +7,7 @@
 #                 -Yes                 don't ask for confirmation
 #
 # Removes: tasks HubBroServer, HubBroTray and AvitoBot, every process running from the avito folder (hub, data server, bot, app,
-# tray, Flet window), the Tailscale https address pointing to the hub (only that one), the "BOT BRO" shortcuts, the
+# tray, Flet window), the Tailscale https address pointing to the hub (only that one), the "BOT BRO" and "HUB BRO" shortcuts, the
 # Flet window cache (%USERPROFILE%\.flet), and the avito folder itself (code, Python of the bot, data, tokens, logs).
 # Leaves: Tailscale, OpenSSH, Node.js (prepare.ps1 installs them; remove them in Settings -> Apps if needed).
 param(
@@ -35,7 +35,7 @@ Say ""
 Say "This removes BOT BRO and HUB BRO from this PC:" Yellow
 Say "  - folder $A (code, bot's Python, shop data, tokens, logs)" Yellow
 Say "  - tasks HubBroServer, HubBroTray, AvitoBot; running hub, data server, tray icons, bot and app" Yellow
-Say "  - Tailscale https address of the hub, 'BOT BRO' shortcuts, Flet cache" Yellow
+Say "  - Tailscale https address of the hub, 'BOT BRO' and 'HUB BRO' shortcuts, Flet cache" Yellow
 Say "  Tailscale, OpenSSH and Node.js stay." Yellow
 if ($KeepData) { Say "  The shop data is copied to the desktop first." Yellow } else { Say "  The shop data is NOT kept (run with -KeepData to keep a copy)." Yellow }
 if (-not $Yes) {
