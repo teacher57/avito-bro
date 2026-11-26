@@ -21,7 +21,7 @@ data/      формат данных (schema/FORMAT.md), сервер данны
    ```
 2. На Mac администратора (код на Mac не нужен: компьютер магазина сам скачает эту ветку и соберёт кабинет):
    ```bash
-   bash <(curl -fsSL https://raw.githubusercontent.com/teacher57/avito-bro/unstable/deploy.sh) <пользователь>@<адрес> --bot --hub --shop-name "Название"
+   bash <(curl -fsSL https://raw.githubusercontent.com/teacher57/avito-bro/stable/deploy.sh) <пользователь>@<адрес> --bot --hub --shop-name "Название"
    ```
    `--bot` / `--hub` — что ставить; `--shop-name` — необязательно (бот говорит «продавец магазина <название>»);
    `--dry-run` — только показать, что будет сделано.

@@ -3,8 +3,8 @@
 # Перед этим у клиента один раз: prepare.ps1 (Tailscale, SSH с ключом этого Mac, Node.js) — он и печатает строку
 # для запуска этого скрипта.
 #
-#   bash <(curl -fsSL https://raw.githubusercontent.com/teacher57/avito-bro/unstable/deploy.sh) \
-#        <пользователь>@<адрес> --bot --hub [--shop-name "Название"] [--branch unstable] [--dry-run]
+#   bash <(curl -fsSL https://raw.githubusercontent.com/teacher57/avito-bro/stable/deploy.sh) \
+#        <пользователь>@<адрес> --bot --hub [--shop-name "Название"] [--branch stable] [--dry-run]
 #
 # Код на Mac не нужен: компьютер клиента сам скачивает ветку открытого репозитория teacher57/avito-bro с GitHub и сам
 # собирает кабинет (npm). С Mac — только команды по SSH.
@@ -13,7 +13,7 @@
 #   --bot         поставить бота и приложение BOT BRO (Python ставится, только если его нет)
 #   --hub         поставить кабинет HUB BRO (ярлык «HUB BRO», значок в трее, https-адрес в Tailscale, расширение Chrome)
 #   --shop-name   название нового магазина: бот говорит «продавец магазина <название>»; без него — «продавец на Авито»
-#   --branch      какую ветку ставить (по умолчанию unstable)
+#   --branch      какую ветку ставить (по умолчанию stable; unstable — проверка новой версии)
 #   --dry-run     только узнать всё о компьютере и показать, что будет сделано; ничего не менять
 #
 # Повторный запуск = обновление кода: данные магазина (data\store), токены и PIN (bot\manager-app\data), переписка бота
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 REPO="teacher57/avito-bro"
-TARGET="" BOT=0 HUB=0 DRY=0 SHOP="" BRANCH="unstable"
+TARGET="" BOT=0 HUB=0 DRY=0 SHOP="" BRANCH="stable"
 while [ $# -gt 0 ]; do
   case "$1" in
     --bot) BOT=1 ;;
