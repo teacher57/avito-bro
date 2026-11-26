@@ -1,4 +1,4 @@
-"""Avito messenger auto-reply bot (BRO x BRO SHOP).
+"""Avito messenger helpers (token, requests, the shop's own account id) + the old standalone auto-reply loop.
 
 Safety first:
   * Only chats with buyers in ALLOWED_BUYERS are ever opened, answered or marked read.
@@ -23,8 +23,8 @@ import urllib.request
 from pathlib import Path
 
 # ---------------------------------------------------------------- settings
-SHOP_USER_ID = SHOP_ACCOUNT_ID            # BRO x BRO SHOP
-ALLOWED_BUYERS = {TEST_BUYER_ID}        # test buyer only (your personal account)
+SHOP_USER_ID = None                 # the shop's own Avito account id: ensure_shop_id() asks Avito with the client's keys
+ALLOWED_BUYERS = set()              # standalone loop only: buyer ids it may answer (empty = none)
 DRY_RUN = True                      # True = print replies, don't send
 POLL_SECONDS = 20
 
@@ -97,6 +97,14 @@ def make_reply(chat, new_messages):
     return f"[draft] reply about «{item}» to: {last_text!r}"
 
 
+def ensure_shop_id(token):
+    """Set SHOP_USER_ID from Avito (GET /core/v1/accounts/self) with the client's own keys; once per run."""
+    global SHOP_USER_ID
+    if SHOP_USER_ID is None:
+        SHOP_USER_ID = int(_request("GET", "/core/v1/accounts/self", token.get())["id"])
+    return SHOP_USER_ID
+
+
 # ---------------------------------------------------------------- main loop
 def buyer_id(chat):
     for u in chat.get("users", []):
@@ -107,6 +115,7 @@ def buyer_id(chat):
 
 def one_pass(token, state):
     t = token.get()
+    ensure_shop_id(token)
     chats = _request("GET", f"/messenger/v2/accounts/{SHOP_USER_ID}/chats?limit=100&chat_types=u2i,u2u", t)
     for chat in chats.get("chats", []):
         if buyer_id(chat) not in ALLOWED_BUYERS:

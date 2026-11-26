@@ -78,11 +78,9 @@ PING_TEXT = "Если остались вопросы, пишите, с радо
 AVITO_POLL = 10             # seconds between Avito checks
 CLOCK_CHECK_EVERY = 600     # seconds between checks of this PC's clock against a trusted source (taylormomsen's clock can drift)
 CLOCK_DRIFT_ALERT = 120     # seconds of drift that's worth telling the admins about
-# The admin is always the same person on any PC (user, 2026-11-17): fixed by Telegram id (a username can change or be
-# taken). He is admin from the first start, even with no live/roles.json; nobody else becomes admin by themselves.
-ADMIN_IDS = {ADMIN_TG_ID}  # @admin
-TEST_BUYER = TEST_BUYER_ID
-ALLOWED_TEST_CHATS = {"TEST_CHAT_ID"}  # 2026-11-13: user asked to hand this one TEST_BUYER chat to the bot
+# The admin: whoever writes to this Telegram bot FIRST (user, 2026-11-26) becomes admin and owner (roles["owner"]); his
+# role never changes. Everyone after him waits for an admin to give a role. So the client writes to the bot right after
+# the install, before anyone else can find it.
 
 LIVE = HERE / "live"
 LIVE.mkdir(exist_ok=True)
@@ -145,10 +143,7 @@ state.setdefault("tg_on", True)
 tg.ENABLED = bool(state["tg_on"])
 state.setdefault("sandbox", {})
 roles = load(ROLES, {"users": {}, "pending": {}})   # users: {tg_id: {role, username, name, mode}}
-for _a in ADMIN_IDS:  # the fixed admin is always there and always admin
-    _u = roles["users"].setdefault(str(_a), {"role": "admin", "username": None, "name": None, "mode": "normal"})
-    _u["role"] = "admin"
-    roles["pending"].pop(str(_a), None)
+roles.setdefault("owner", None)
 
 
 def ids_with(role):
@@ -305,10 +300,11 @@ def check_clock():
 
 def avito_poll():
     t = token.get()
+    avito.ensure_shop_id(token)
     chats = avito._request("GET", f"/messenger/v2/accounts/{avito.SHOP_USER_ID}/chats?limit=50&chat_types=u2i,u2u", t).get("chats", [])
     for c in chats:
-        if (c.get("created") or 0) < state["started"] or (avito.buyer_id(c) == TEST_BUYER and c["id"] not in ALLOWED_TEST_CHATS):
-            continue  # only dialogs that started after the bot did; never the owner's own test chat (unless explicitly allowed)
+        if (c.get("created") or 0) < state["started"]:
+            continue  # only dialogs that started after the bot did
         cid = c["id"]
         conv = state["chats"].get(cid)
         if conv is None:
@@ -965,9 +961,16 @@ def on_message(msg):
     frm, text = msg.get("from") or {}, (msg.get("text") or "").strip()
     uid = frm.get("id")
     u = roles["users"].get(str(uid))
-    if uid in ADMIN_IDS and u is not None and not u.get("name"):  # fill in the fixed admin's name on his first message
-        u.update(username=frm.get("username"), name=frm.get("first_name"))
+    if u is None and not roles.get("owner") and not ids_with("admin"):  # the very first person to write: admin and owner
+        u = roles["users"][str(uid)] = {"role": "admin", "username": frm.get("username"), "name": frm.get("first_name"),
+                                        "mode": "normal"}
+        roles["owner"] = str(uid)
+        roles["pending"].pop(str(uid), None)
         save(ROLES, roles)
+        log("first Telegram user is the admin", uid)
+        tg.send(uid, "Вы первый написали этому боту — теперь вы его <b>админ</b>. Тех, кто напишет после вас, вы "
+                     "увидите здесь и сами решите, какую роль им дать.", keyboard=keyboard(uid))
+        return
     if u is None:
         tg.send(uid, NO_ACCESS)
         if str(uid) not in roles["pending"]:
@@ -1101,8 +1104,8 @@ def on_callback(cb):
     elif data.startswith("role:") and u["role"] == "admin":
         _, target, role = data.split(":")
         p = roles["pending"].pop(target, {})
-        if int(target) in ADMIN_IDS:
-            pass  # the fixed admin's role never changes
+        if target == roles.get("owner"):
+            pass  # the owner's (first admin's) role never changes
         elif role in ("manager", "admin"):
             roles["users"][target] = {"role": role, "username": p.get("username"), "name": p.get("name"), "mode": "normal"}
             tg.send(int(target), f"Вам выдана роль: <b>{'менеджер' if role == 'manager' else 'админ'}</b>.", keyboard=MENU[role])
@@ -1275,6 +1278,10 @@ def main():
     if not SPEND.exists():
         save(SPEND, spend)
     token = avito.Token()
+    try:
+        log("avito account", avito.ensure_shop_id(token))  # the client's own account id, from his keys
+    except Exception as ex:  # no internet / wrong keys now: avito_poll asks again
+        log("avito account id not known yet", type(ex).__name__, ex)
     log(f"manager started | dry_run={DRY_RUN} | live_on={bool(state.get('live_on'))} | tg_on={bool(state.get('tg_on', True))}")
     for a in ids_with("admin"):
         try:
