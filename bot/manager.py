@@ -45,8 +45,8 @@ sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE / "brain")); sys.path
 import bot as avito   # Avito HTTP helpers + token
 import tg
 import bot_license as lic  # BOT BRO license: without it Avito replies stay off (Telegram keeps working)
-import brain as brain_module  # module ref, to set CLOCK_OFFSET after a clock check
-from brain import Brain, model_for_item, order_hello
+import facts  # facts from code (sizes, shipping day, guards); module ref, to set CLOCK_OFFSET after a clock check
+from facts import model_for_item, order_hello
 import products as products_module  # refresh(): pick up data server changes (manager app, HUB BRO) without a restart
 from products import PRODUCTS
 from build_new_html_style import why_ru
@@ -149,7 +149,6 @@ for _a in ADMIN_IDS:  # the fixed admin is always there and always admin
     _u = roles["users"].setdefault(str(_a), {"role": "admin", "username": None, "name": None, "mode": "normal"})
     _u["role"] = "admin"
     roles["pending"].pop(str(_a), None)
-brain = Brain()
 
 
 def ids_with(role):
@@ -211,61 +210,64 @@ def mark_done(conv):
             m["done"] = True
 
 
-def decide(conv, model, price):
-    """Run the brain on the pending block. Returns (reply, photos, escalate, why)."""
-    block, _ = pending_block(conv)
-    if has_media(block):
-        return None, [], True, MEDIA_WHY
-    first = conv["msgs"].index(block[0])
-    ctx = context_of(conv["msgs"][:first])
-    brain.sent_photos = sent_photos(conv)  # photos go one at a time: the next one not sent in this chat yet
-    out = brain.answer("\n".join(m["text"] for m in block), model=model, context=ctx, price=price)
-    reply = out.get("reply")
-    if reply and not out["escalate"]:
-        reply = brain_module.go_ahead_once(reply, said_before(conv))
-    return reply, out.get("photos") or [], out["escalate"], out.get("why", "")
-
-
 def said_before(conv):
     """Texts the bot (sent) and the shop already wrote in this chat."""
     return [m["text"] for m in conv["msgs"] if m["who"] == "shop" or (m["who"] == "bot" and m.get("sent"))]
 
 
-LIVE_MODEL = "gpt-5.4"  # live Avito chats are voiced by GPT-5.4; falls back to the rules if the API errors
+LIVE_MODEL = "gpt-5.4"  # the only model: there is no rule bot (branch unstable-gpt-only)
+GPT_DOWN_WHY = "GPT не отвечает"
+
+
+def gpt_error_text(ex):
+    return f"{type(ex).__name__}{': нет ключа OPENAI_API_KEY' if isinstance(ex, KeyError) else ''}"
+
+
+def gpt_down_alert(ex):
+    """GPT failed (key expired / revoked, no internet, OpenAI down): tell the admins once until GPT answers again."""
+    if state.get("gpt_down"):
+        return
+    state["gpt_down"] = True
+    save(STATE, state)
+    for a in ids_with("admin"):
+        tg.send(a, f"⚠️ <b>GPT не отвечает</b> ({e(gpt_error_text(ex))}). Бот никому не отвечает: новые сообщения покупателей "
+                   "уходят менеджеру. Проверьте ключ OpenAI и интернет.")
 
 
 def decide_live(conv, model, price):
-    """Live chats: GPT-5.4 writes the answer; any API error (bad key, OpenAI down, ...) falls back to the rules."""
+    """Live chats: GPT-5.4 writes the answer. GPT failed -> nobody answers: the chat goes to the manager (Telegram)."""
     try:
-        reply, photos, esc, why, cost_usd = decide_gpt(conv, model, price, LIVE_MODEL)
-        return reply, photos, esc, why, cost_usd
+        out = decide_gpt(conv, model, price, LIVE_MODEL)
     except Exception as ex:
-        log("live gpt error, falling back to rules", conv.get("title"), type(ex).__name__, ex)
-        reply, photos, esc, why = decide(conv, model, price)
-        return reply, photos, esc, why, None
+        log("live gpt error: chat to the manager", conv.get("title"), type(ex).__name__, ex)
+        gpt_down_alert(ex)
+        return None, [], True, f"{GPT_DOWN_WHY} ({gpt_error_text(ex)})", None
+    if state.get("gpt_down"):
+        state["gpt_down"] = False
+        for a in ids_with("admin"):
+            tg.send(a, "✅ GPT снова отвечает.")
+    return out
 
 
 def decide_gpt(conv, model, price, gpt_model=None):
-    """Same as decide(), but GPT (gpt_model, default GPT-4.1 mini) writes the answer (test chat only). Returns (reply, photos, escalate, why, cost)."""
-    import gpt_reply  # lazy: the live bot never needs it
-    gpt_reply._brain = brain  # reuse the loaded brain (size tree) instead of loading a second copy
+    """GPT-5.4 answers the pending block (live and test chats). Returns (reply, photos, escalate, why, cost).
+    Raises if OpenAI can't be reached (no key, no internet): the caller decides what happens then."""
+    import gpt_reply
     gpt_reply.on_cost = add_spend
     block, _ = pending_block(conv)
     if has_media(block):  # photo / voice / video / file: straight to Maxim, no GPT call
         return None, [], True, MEDIA_WHY, 0.0
     first = conv["msgs"].index(block[0])
-    if brain_module.asks_if_bot("\n".join(m["text"] for m in block)):  # «бот» / «робот»: straight to Maxim, no GPT call
-        return None, [], True, "buyer asks if this is a bot: Maxim answers", 0.0
     title = next((p["name"] for p in PRODUCTS if p["key"] == model), None)
     msgs = [m for m in conv["msgs"] if m["who"] != "bot" or m.get("sent")]
     g = gpt_reply.answer(title, price, msgs, model=gpt_model)
     why = g.get("why") or ("GPT: [МАКСИМ]" if g["escalate"] else "GPT")
     # «оформил» (order_placed) alone notifies nobody: the 🛒 note needs Avito's «новый заказ» and a known size (user's rule, 17.11)
     # safety net for a product marked «нет в наличии»: no «можете заказывать» / ship day, whatever GPT wrote
-    out = brain_module.stock_guard({"reply": g["reply"], "photos": g["photos"], "escalate": g["escalate"], "why": why}, model,
+    out = facts.stock_guard({"reply": g["reply"], "photos": g["photos"], "escalate": g["escalate"], "why": why}, model,
                                    "\n".join(m["text"] for m in block), context_of(conv["msgs"][:first]))
     if out["reply"] and not out["escalate"]:  # «можете заказывать, … отправлю» at most once per chat
-        once = brain_module.go_ahead_once(out["reply"], said_before(conv))
+        once = facts.go_ahead_once(out["reply"], said_before(conv))
         if once != out["reply"]:
             out = {**out, "reply": once, "why": out["why"] + "; «можете заказывать» уже было"}
     return out["reply"], out["photos"], out["escalate"], out["why"], g["cost_usd"]
@@ -288,7 +290,7 @@ def check_clock():
         log("clock check failed", type(ex).__name__, ex)
         return
     offset = server_t - time.time()
-    brain_module.CLOCK_OFFSET = offset
+    facts.CLOCK_OFFSET = offset
     drifted = abs(offset) >= CLOCK_DRIFT_ALERT
     if drifted != state.get("clock_drifted", False):
         log("clock drift" if drifted else "clock back to normal", f"{offset:+.0f}s")
@@ -553,7 +555,7 @@ def tick_real(now):
             log("order without a size, buyer silent 30 min: manager notified", cid)
             save(STATE, state)
         elif (not block and conv.get("bot_t") and not conv.get("pinged") and now - conv["bot_t"] >= PING_AFTER
-              and not any(brain_module.QUESTIONS_LEFT.search(t or "") for t in said_before(conv))  # once per chat
+              and not any(facts.QUESTIONS_LEFT.search(t or "") for t in said_before(conv))  # once per chat
               and not has_order(conv)  # the item is already ordered: no «клиент молчит» reminder (user's rule, 14.11)
               and conv["msgs"] and conv["msgs"][-1]["who"] == "bot"):
             sent = is_live(now, conv)
@@ -697,7 +699,6 @@ def ordered_size(conv):
     named); if OpenAI fails, the size the shop last named. "" = no size in the chat. The buyer is never asked."""
     try:
         import gpt_reply
-        gpt_reply._brain = brain
         gpt_reply.on_cost = add_spend
         msgs = [m for m in conv["msgs"] if m["who"] != "bot" or m.get("sent")]
         return gpt_reply.order_size(conv["title"], conv["price"], msgs, model=LIVE_MODEL)[0]
@@ -705,7 +706,7 @@ def ordered_size(conv):
         log("order size: gpt error, using the last size named", type(ex).__name__, ex)
         for m in reversed(conv["msgs"]):  # the last size the bot / shop recommended in this chat
             if m["who"] in ("bot", "shop") and (m["who"] == "shop" or m.get("sent")):
-                f = brain_module.REPLY_SIZE.search(m["text"] or "")
+                f = facts.REPLY_SIZE.search(m["text"] or "")
                 if f:
                     return products_module.label_of(conv.get("model"), int(f.group(1) or f.group(2)))
         return ""
@@ -772,19 +773,14 @@ def tick_sandbox(now):
             save(STATE, state)
             continue
         if block and now - last_t >= (0 if instant(uid) else reply_delay(sb, block)):
-            gpt_note = ""
-            eng = ENGINES[engine(uid)]
-            if eng["model"]:
-                try:
-                    reply, photos, esc, why, cost_usd = decide_gpt(sb, sb["model"], price_for(sb["model"]), eng["model"])
-                    gpt_note = f"\n<i>({eng['name']} · ${cost_usd:.5f})</i>"
-                except Exception as ex:
-                    log("gpt error", uid, type(ex).__name__, ex)
-                    tg.send(uid, f"⚠️ GPT не ответил ({e(type(ex).__name__)}{': нет ключа OPENAI_API_KEY' if isinstance(ex, KeyError) else ''}), "
-                                 "отвечают правила.")
-                    reply, photos, esc, why = decide(sb, sb["model"], price_for(sb["model"]))
-            else:
-                reply, photos, esc, why = decide(sb, sb["model"], price_for(sb["model"]))
+            try:
+                reply, photos, esc, why, cost_usd = decide_gpt(sb, sb["model"], price_for(sb["model"]), LIVE_MODEL)
+                gpt_note = f"\n<i>(GPT-5.4 · ${cost_usd:.5f})</i>"
+            except Exception as ex:
+                log("gpt error", uid, type(ex).__name__, ex)
+                tg.send(uid, f"⚠️ GPT не ответил ({e(gpt_error_text(ex))}): бот никому не отвечает, в живом чате "
+                             "сообщение ушло бы менеджеру.")
+                reply, photos, esc, why, gpt_note = None, [], True, f"{GPT_DOWN_WHY} ({gpt_error_text(ex)})", ""
             mark_done(sb)
             if esc:
                 sb["escalated"] = why
@@ -828,7 +824,7 @@ def tick_sandbox(now):
                          + ("\n<i>(в тесте с «⚡ Отвечает сразу» — через 1 минуту)</i>" if instant(uid) else ""))
             save(STATE, state)
         elif not block and sb.get("bot_t") and not sb.get("pinged") and now - sb["bot_t"] >= PING_AFTER and not has_order(sb) \
-                and not any(brain_module.QUESTIONS_LEFT.search(m.get("text") or "") for m in sb["msgs"] if m["who"] == "bot"):
+                and not any(facts.QUESTIONS_LEFT.search(m.get("text") or "") for m in sb["msgs"] if m["who"] == "bot"):
             sb["msgs"].append({"t": now, "who": "bot", "text": PING_TEXT, "sent": True})
             sb["pinged"] = True
             tg.send(uid, f"🤖 {e(PING_TEXT)}\n<i>(напоминание через 15 мин тишины)</i>")
@@ -901,13 +897,7 @@ KEY_BTN = "💰 Ключ OpenAI"
 MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN]], "manager": [["🧪 Тест"]]}
 INSTANT_ON, INSTANT_OFF = "⚡ Отвечает сразу", "⏱ Отвечает как клиентам"
 # who answers in the test chat (live chats always use the rules); the button shows the current one, a tap moves to the next
-ENGINES = {"rules": {"button": "🧩 Отвечают: правила", "model": None, "name": "правила",
-                     "info": "🧩 В тестовом чате снова отвечает бот на правилах."},
-           "gpt": {"button": "🧠 Отвечает: GPT-4.1 mini", "model": "gpt-4.1-mini", "name": "GPT-4.1 mini",
-                   "info": "🧠 В тестовом чате теперь отвечает GPT-4.1 mini (промпт + инструменты: фото, сетка, день отправки)."},
-           "gpt-5.4": {"button": "🧠 Отвечает: GPT-5.4", "model": "gpt-5.4", "name": "GPT-5.4",
-                       "info": "🧠 В тестовом чате теперь отвечает GPT-5.4 (умнее, примерно в 6 раз дороже 4.1 mini)."}}
-ENGINE_BUTTONS = {e_["button"] for e_ in ENGINES.values()} | {"🧠 Отвечает: GPT"}  # + the old label from earlier keyboards
+
 
 
 def instant(uid):
@@ -916,13 +906,7 @@ def instant(uid):
 
 def test_menu(uid):
     return [["♻️ Сброс", "👖 Товар"], [INSTANT_ON if instant(uid) else INSTANT_OFF],
-            [ENGINES[engine(uid)]["button"]], [ORDER_BTN], ["⬅️ Выйти из теста"]]
-
-
-def engine(uid):
-    """Who answers in this user's test chat: a key of ENGINES («rules» = brain.py, the others = gpt/gpt_reply.py)."""
-    e_ = roles["users"].get(str(uid), {}).get("engine", "rules")
-    return e_ if e_ in ENGINES else "rules"
+            [ORDER_BTN], ["⬅️ Выйти из теста"]]
 
 
 FEED_ON, FEED_OFF = "🔔 Чаты менеджера: вкл", "🔕 Чаты менеджера: выкл"
@@ -1022,11 +1006,6 @@ def on_message(msg):
                     else f"⏱ Бот снова отвечает как клиентам: {REPLY_DELAY} с на первое сообщение и после паузы больше 5 мин, "
                          f"{FAST_DELAY} с, пока переписка идёт.",
                     keyboard=keyboard(uid))
-            return
-        if text in ENGINE_BUTTONS:
-            keys = list(ENGINES)
-            u["engine"] = keys[(keys.index(engine(uid)) + 1) % len(keys)]; save(ROLES, roles)
-            tg.send(uid, ENGINES[u["engine"]]["info"], keyboard=keyboard(uid))
             return
         if text == "👖 Товар":
             tg.send(uid, "Какой товар открыт у «покупателя»?", buttons=product_buttons())

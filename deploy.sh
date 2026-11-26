@@ -8,7 +8,7 @@
 #   <адрес>       IP в Tailscale (100.x.y.z) или имя компьютера в Tailscale
 #   --bot         поставить бота и приложение BOT BRO (Python ставится, только если его нет)
 #   --hub         поставить кабинет HUB BRO (ярлык «HUB BRO», значок в трее, https-адрес в Tailscale, расширение Chrome)
-#   --shop-name   название магазина для нового магазина (по умолчанию — имя компьютера)
+#   --shop-name   название нового магазина: его называет покупателям бот (по умолчанию — имя компьютера)
 #   --dry-run     только узнать всё о компьютере и показать, что будет сделано; ничего не менять
 #
 # Повторный запуск = обновление кода: данные магазина (data\store), токены и PIN (bot\manager-app\data), переписка бота
@@ -167,12 +167,14 @@ if (-not (Test-Path 'data\\server\\access-key.txt')) {
   node -e \"require('fs').writeFileSync('data/server/access-key.txt', require('crypto').randomBytes(24).toString('base64url'))\"
   'ключ доступа создан'
 } else { 'ключ доступа уже есть' }
-if ($HUB -eq 1 -and -not (Test-Path 'data\\store\\shop.json')) {
+# новый магазин (и для бота: его название бот называет покупателям, время отправки — отсюда же)
+if (-not (Test-Path 'data\\store\\shop.json')) {
   New-Item -ItemType Directory -Force data\\store | Out-Null
-  \$shop = @{ format='shop'; version=1; name=$SHOP_JSON; stockSource='warehouse'; cutoffs=@{ weekday='19:00'; weekend='18:00' };
+  \$src = if ($HUB -eq 1) { 'warehouse' } else { 'manual' }
+  \$shop = @{ format='shop'; version=1; name=$SHOP_JSON; stockSource=\$src; cutoffs=@{ weekday='19:00'; weekend='18:00' };
              serviceOrder=@('yandex','avito','cdek','post','fivepost','dpd') } | ConvertTo-Json -Depth 3
   [IO.File]::WriteAllText(\"\$PWD\\data\\store\\shop.json\", \$shop)
-  'новый магазин: наличие со склада'
+  \"новый магазин «\$((\$shop | ConvertFrom-Json).name)»: наличие \$(if (\$src -eq 'warehouse') { 'со склада' } else { 'из BOT BRO' })\"
 }
 " | sed 's/^/   /'
 

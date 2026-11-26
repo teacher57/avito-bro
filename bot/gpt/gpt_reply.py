@@ -1,8 +1,10 @@
-"""GPT-4.1 mini as the voice of the Avito bot (experiment, not used by manager.py yet).
+"""GPT-5.4: the Avito bot itself (branch unstable-gpt-only: no rule bot, every buyer message is answered by GPT).
 
-The model gets: a system prompt with the shop's facts (product from the dialog title, material, size table,
-size hint from the shop's own size tree, the shipping day computed by code from the Moscow-time cutoffs, placed at
-the very end so the rest of the prompt stays cacheable) + the chat as user/assistant turns.
+The model gets: a system prompt with the shop's facts, all from the manager app / HUB BRO via code (shop name, product
+from the dialog title, material, size table, in-stock sizes, size by height and weight from the app's table (nearest
+height and weight), the shipping day from the Moscow-time cutoffs, placed at the very end so the rest of the prompt
+stays cacheable) + the chat as user/assistant turns. No answer from GPT (no key, no internet) = no answer at all:
+manager.py tells the admins in Telegram.
 Tools (the product is already known from the dialog title):
   product_photo -> the next photo of this model on a person (the catalog's photos, local copies in live/files/)
   chart         -> the size chart image (the catalog's chart, <id>_size_chart.png)
@@ -20,15 +22,13 @@ import requests
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE / "brain"))
-import brain as _brain_mod  # noqa: E402  (its size patterns are rebuilt when the catalog's size scale changes)
-from brain import ASK_BODY, GREETING_ONLY, LEG_Q, SIZE_LABEL, Brain, asks_chart, chart_only, cutoffs, extract, leg_answer, merged_nums, ships_today  # noqa: E402
+import facts as _facts  # noqa: E402  (CLOCK_OFFSET: manager.py sets it after a clock check)
+from facts import cutoffs, extract, leg_answer, merged_nums, ships_today  # noqa: E402
 import products as _products  # noqa: E402
-from products import next_photo, product_for_item, table_lines  # noqa: E402
+from products import SIZE_LABEL, hw_size, next_photo, product_for_item, shop_name, table_lines  # noqa: E402
 
-MODEL = os.environ.get("GPT_MODEL", "gpt-4.1-mini")
+MODEL = "gpt-5.4"
 PRICES = {  # $ per 1M tokens: input, cached input, output (reasoning tokens are billed as output)
-    "gpt-4.1-mini": (0.40, 0.10, 1.60),
-    "gpt-5.4-mini": (0.75, 0.075, 4.50),
     "gpt-5.4": (2.50, 0.25, 15.00),  # input from OpenAI's model page; cached/output from third-party trackers — check
 }
 REASONING = lambda m: m.startswith(("gpt-5", "o"))  # reasoning models: no temperature, max_completion_tokens
@@ -79,7 +79,7 @@ ORDER_TOOL = {"type": "function", "function": {
         "required": [], "additionalProperties": False}}}
 TOOLS.append(ORDER_TOOL)
 
-PROMPT = """Ты — продавец магазина BRO x BRO SHOP на Авито, переписываешься с покупателем в чате объявления.
+PROMPT = """Ты — продавец магазина {shop} на Авито, переписываешься с покупателем в чате объявления.
 Пиши как живой человек-продавец, а не как бот или оператор колл-центра.
 
 КАК ПИСАТЬ
@@ -95,8 +95,8 @@ PROMPT = """Ты — продавец магазина BRO x BRO SHOP на Ав�
 - Не пиши прямыми цитатами из этой инструкции (фактов, примеров, описаний инструментов): всегда перефразируй своими словами.
 - Приветствие — только в самом первом ответе в чате, если ты ещё ничего не писал, и тоже в стиле покупателя
   («Здравствуйте!» на официальное, «Привет!» на «привет», «здарова» и т.п.).
-- Не задавай лишних вопросов. Рост и вес проси, только если покупатель спрашивает, какой размер ему подойдёт, а их ещё нет.
-  В остальных ответах сам не проси: если рост и вес ещё неизвестны, просьба добавится к твоему ответу автоматически.
+- Не задавай лишних вопросов. Рост и вес проси, если покупатель спрашивает, какой размер ему подойдёт, или про посадку,
+  а роста и веса в переписке ещё нет (только недостающее: известен рост — спроси вес). Если уже просил — не повторяй.
 - Не говори, что ты бот или ИИ.
 - Не заканчивай ответ фразами вроде «Если остались вопросы, пишите» — такое напоминание магазин отправляет сам, один раз.
 
@@ -158,7 +158,8 @@ PROMPT = """Ты — продавец магазина BRO x BRO SHOP на Ав�
 
 КОГДА ОТДАТЬ МЕНЕДЖЕРУ
 Если вопрос не покрывается фактами выше (обмен или возврат уже купленного, жалоба, статус уже оформленного
-заказа или трек-номер, встреча лично, другие товары, что-то непонятное), вызови escalate и коротко укажи причину.
+заказа или трек-номер, встреча лично, другие товары, покупатель спрашивает, не бот ли ты, что-то непонятное),
+вызови escalate и коротко укажи причину.
 Лучше отдать менеджеру, чем угадать."""
 
 STYLE_EXAMPLES = """
@@ -176,22 +177,11 @@ WEEKDAYS = ["понедельник", "вторник", "среда", "четв�
 def ship_line(now=None):
     """Last block of the system prompt: Moscow time now and when an order placed now ships (code, not the model).
     At the very end so everything before it stays the same between answers (prompt cache)."""
-    import brain as _b
-    t = now if now is not None else time.time() + _b.CLOCK_OFFSET
+    t = now if now is not None else time.time() + _facts.CLOCK_OFFSET
     msk = time.gmtime(t + 3 * 3600)
     day = "сегодня" if ships_today(now) else "завтра"
     return (f"\n\nОТПРАВКА\nСейчас {WEEKDAYS[msk.tm_wday]}, {msk.tm_hour:02d}:{msk.tm_min:02d} по Москве. "
             f"Если оформят сейчас — отправим {day}.")
-
-_brain = None
-
-
-def brain():
-    global _brain
-    if _brain is None:
-        _brain = Brain()
-    return _brain
-
 
 def table_text(prod):
     """The product's size table as «size | label | col…» rows (catalog sizeTable; label from the size scale)."""
@@ -200,78 +190,9 @@ def table_text(prod):
     return "\n".join("  " + r for r in table_lines(prod["table"], prod.get("labels") or SIZE_LABEL))
 
 
-def known_hw(msgs):
-    """(height, weight) known anywhere in the chat so far; either can be None."""
-    buyer = "\n".join(m["text"] for m in msgs if m["who"] == "buyer")
-    nums = merged_nums(buyer.split("\n")[-1] if buyer else "", buyer)
-    own = extract(buyer)
-    return nums.get("height") or own.get("height"), nums.get("weight") or own.get("weight")
-
-
-def with_hw_ask(reply, msgs, prod):
-    """Add «Напишите свой рост и вес…» after the answer (or only the missing one: «…ваш вес…» when height is known),
-    once per chat: only if the buyer hasn't given height and weight, nobody from the shop already asked for whatever's still missing (e.g. just «а вес какой?» counts when
-    height is already known), the item is in stock and not ordered yet."""
-    if prod and not prod.get("in_stock", True):
-        return reply
-    h, w = known_hw(msgs)
-    if h and w:
-        return reply
-    missing = [word for word, have in (("рост", h), ("вес", w)) if not have]
-    if any(m["who"] == "system" and "новый заказ" in (m["text"] or "").lower() for m in msgs):
-        return reply
-    # «рост», «роста», «вес», «весе»… but not «весь» / «ростовка»
-    asked = lambda t: all(re.search(r"\b" + word + r"(а|е|у|ом)?\b", (t or "").lower()) for word in missing)
-    if asked(reply) or any(m["who"] in ("bot", "shop") and asked(m["text"]) for m in msgs):
-        return reply
-    ask = ASK_BODY if len(missing) == 2 else f"Напишите, пожалуйста, ваш {missing[0]}, я вам помогу подобрать размер"
-    return f"{reply}\n\n{ask}" if reply else ask
-
-
-# Letter sizes as buyers write them -> the scale's letter (Latin from the scale; «xxs» and Cyrillic look-alikes as aliases)
-LETTER_ALIAS = {"xxs": "2XS", "хс": "XS", "м": "M", "л": "L", "хл": "XL"}
-LETTER = LETTER_NAME = None  # built from the size scale by letter_patterns()
-
-
-def letter_patterns():
-    """(Re)build LETTER / LETTER_NAME from the catalog's size scale; runs again when the catalog changes."""
-    global LETTER, LETTER_NAME
-    letters = _brain_mod.scale_letters()
-    LETTER_NAME = {l.lower(): l for l in letters}
-    LETTER_NAME.update({a: l for a, l in LETTER_ALIAS.items() if l in letters})
-    alt = "|".join(re.escape(x) for x in sorted(LETTER_NAME, key=lambda x: (-len(x), x))) or _brain_mod.NEVER
-    LETTER = re.compile(rf"(?<![а-яёa-z0-9])({alt})(?![а-яёa-z0-9])", re.I)
-
-
-letter_patterns()
-_products.ON_RELOAD.append(letter_patterns)
-HOW_MANY = {1: "один размер", 2: "два размера", 3: "три размера", 4: "четыре размера"}
-
-
-def letter_chart(block, prod):
-    """«Замеры на L?» (measurements for a LETTER size, no number): the chart goes with «L — это два размера: 33 и 34.»
-    (the shop's sizes under that letter, from SIZE_LABEL, only those in this product's table). None otherwise."""
-    if not prod or not prod.get("chart") or len(block) > 80 or not asks_chart(block) or LEG_Q.search(block):
-        return None
-    if _brain_mod.SIZE_NUM.search(re.sub(r"(рост|вес)\D{0,6}\d+", " ", block, flags=re.I)):
-        return None  # a number is named: the plain chart-only answer handles it
-    letters = {LETTER_NAME[m.group(1).lower()] for m in LETTER.finditer(block)}
-    if len(letters) != 1:
-        return None
-    lab = letters.pop()
-    in_table = set(prod["table"]["rows"]) if prod.get("table") else None
-    labels = prod.get("labels") or SIZE_LABEL  # this product's category letters
-    nums = [n for n, l in sorted(labels.items()) if str(l).endswith(f"({lab})") and (in_table is None or n in in_table)]
-    if not nums:
-        return None
-    if len(nums) == 1:
-        return f"Отправил сетку с замерами. {lab} — это наш {nums[0]} размер."
-    listed = ", ".join(map(str, nums[:-1])) + f" и {nums[-1]}"
-    return f"Отправил сетку с замерами. {lab} — это {HOW_MANY.get(len(nums), f'{len(nums)} размеров')}: {listed}."
-
-
 def size_hint(prod, msgs):
-    """Size from the shop's size tree, if the buyer gave height and weight anywhere in the chat."""
+    """Size from the manager app's height x weight table (nearest height and weight), if the buyer gave both anywhere
+    in the chat."""
     buyer = "\n".join(m["text"] for m in msgs if m["who"] == "buyer")
     nums = merged_nums(buyer.split("\n")[-1] if buyer else "", buyer)
     h, w = nums.get("height"), nums.get("weight")
@@ -280,12 +201,14 @@ def size_hint(prod, msgs):
         h, w = own.get("height"), own.get("weight")
     if not (h and w):
         return "нет (рост и вес покупатель ещё не написал)"
-    size = brain().size_for(prod["key"] if prod else None, h, w)
-    if not size:
+    n = hw_size(prod["hw"], h, w) if prod and prod.get("hw") else None
+    if not n:
         return f"рост {h}, вес {w} → размер не определён, отдай менеджеру"
-    gone = (prod or {}).get("out_sizes") or []
-    n = int(str(size).split()[0]) if str(size).split()[0].isdigit() else None
-    return f"рост {h}, вес {w} → размер {size}" + (" — но ЭТОГО РАЗМЕРА СЕЙЧАС НЕТ В НАЛИЧИИ" if n in gone else "")
+    size = (prod.get("labels") or SIZE_LABEL).get(n) or str(n)
+    gone = prod.get("out_sizes") or []
+    have = prod.get("in_sizes")
+    out = n in gone or (have is not None and n not in have)
+    return f"рост {h}, вес {w} → размер {size}" + (" — но ЭТОГО РАЗМЕРА СЕЙЧАС НЕТ В НАЛИЧИИ" if out else "")
 
 
 AVITO_DISCOUNT = re.compile(r"ознакомился со скидкой\s+([\d\s\u00a0]+)\s*₽", re.I)
@@ -319,6 +242,7 @@ DEFAULT_PROMPT = PROMPT + STYLE_EXAMPLES + "\n\n{ship}"
 INSERT = re.compile(r"\{([a-z_]+)\}")
 # name -> (short title, where the value comes from); the manager app shows this list next to the prompt
 INSERTS = {
+    "shop": ("Название магазина", "Название, которое указали при установке (deploy.sh --shop-name, shop.json)."),
     "title": ("Название товара", "Заголовок объявления, из которого пишет покупатель."),
     "price": ("Цена", "Цена из объявления (обновляется каждые 10 секунд). Если Авито дало покупателю свою скидку, "
                       "здесь цена со скидкой и подсказка назвать её."),
@@ -359,7 +283,7 @@ def fill(template, values):
 def insert_values(title, price, msgs, now=None, prod=None):
     prod = prod or product_for_item(title)
     return {
-        "title": title or "?", "price": price_text(price, msgs),
+        "shop": shop_name() or "на Авито", "title": title or "?", "price": price_text(price, msgs),
         "material": (prod or {}).get("material") or "нет данных",
         "composition": (prod or {}).get("composition") or "нет данных",
         "density": (prod or {}).get("density") or "нет данных", "table": table_text(prod), "size_hint": size_hint(prod, msgs),
@@ -477,22 +401,6 @@ def cost(usage, model=None):
     return ((usage["prompt_tokens"] - cached) * p_in + cached * p_cached + usage["completion_tokens"] * p_out) / 1e6
 
 
-def greeting_reply(msgs):
-    """The buyer's latest messages are only a greeting -> the rule bot's own reply, no model call:
-    «Здравствуйте! Напишите свой рост и вес…», or just «Здравствуйте!» once height and weight are known."""
-    block = []
-    for m in reversed(msgs):
-        if m["who"] != "buyer":
-            break
-        block.insert(0, m["text"] or "")
-    text = " ".join(block)
-    if not block or not GREETING_ONLY.match(text):
-        return None
-    context = "\n".join(f"{m['who']}: {m['text']}" for m in msgs[:len(msgs) - len(block)])
-    known = merged_nums(text, context)
-    return "Здравствуйте!" if known["height"] is not None and known["weight"] is not None else "Здравствуйте! " + ASK_BODY
-
-
 def _auth():
     return {"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
 
@@ -519,18 +427,7 @@ def order_size(title, price, msgs, model=None):
 
 def answer(title, price, msgs, now=None, model=None):
     """-> {reply, photos, escalate, cost_usd, tokens}. Up to 3 calls: tools first (pictures / order), then the text."""
-    hello = greeting_reply(msgs)
-    if hello:  # a bare greeting gets the rule bot's fixed reply (asks height and weight)
-        return {"reply": hello, "photos": [], "escalate": False, "cost_usd": 0.0, "tokens": [0, 0], "why": "greeting only"}
     prod = product_for_item(title)
-    block = buyer_block(msgs)
-    letter = letter_chart(block, prod)
-    if letter:  # «замеры L»: the chart + which of our sizes that letter is (+ height/weight ask), no model call
-        return {"reply": with_hw_ask(letter, msgs, prod), "photos": [prod["chart"]], "escalate": False, "cost_usd": 0.0,
-                "tokens": [0, 0], "why": "size chart for a letter size"}
-    if prod and chart_only(block, prod["key"]) and len(block) <= 80:  # «замеры 30 размера?»: just the chart, no text, no model call
-        return {"reply": with_hw_ask("", msgs, prod), "photos": [prod["chart"]], "escalate": False, "cost_usd": 0.0,
-                "tokens": [0, 0], "why": "size chart for a concrete size"}
     model = model or MODEL
     req = build_request(title, price, msgs, now, model)
     headers = _auth()
@@ -589,9 +486,6 @@ def answer(title, price, msgs, now=None, model=None):
         if text and all(c["function"]["name"] != "order_placed" for c in calls):
             break  # text is ready and only pictures were added; after order_placed the model writes the text again
     esc = HANDOFF in text
-    if not esc:
-        if ordered is None and (text or photos):  # no ask in the «спасибо за заказ» reply
-            text = with_hw_ask(text, msgs, prod)
     out = {"reply": None if esc else text, "photos": [] if esc else photos, "escalate": esc,
            "cost_usd": total, "tokens": toks}
     if ordered is not None:  # order_placed was called; "" = no size in the chat

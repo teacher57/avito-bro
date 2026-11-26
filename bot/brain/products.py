@@ -21,10 +21,15 @@ DEFAULT_SCALE = [("25", "2XS"), ("26", "XS"), ("27", "XS"), ("28", "S"), ("29", 
                  ("32", "M"), ("33", "L"), ("34", "L"), ("36", "XL")]
 
 
+def nearest(points, value):
+    """Index of the point closest to value; on a tie the bigger one (None if there are no points)."""
+    return min(range(len(points)), key=lambda i: (abs(points[i] - value), -points[i]), default=None)
+
+
 def hw_size(hw, height, weight):
-    """Size number from a size-by-height-and-weight grid: the last band that starts at or below the value (None = empty cell)."""
-    hi = max((i for i, h in enumerate(hw["heights"]) if h <= height), default=None)
-    wi = max((i for i, w in enumerate(hw["weights"]) if w <= weight), default=None)
+    """Size number from the manager app's height x weight table: the row of the nearest height and the column of the
+    nearest weight (a tie goes to the bigger one). None = empty cell (the bot doesn't name a size)."""
+    hi, wi = nearest(hw["heights"], height), nearest(hw["weights"], weight)
     return None if hi is None or wi is None else hw["cells"][hi][wi]
 
 
@@ -180,7 +185,7 @@ BY_KEY = {}
 SIZE_LABEL = {}   # {25: "25 (2XS)", …}: the shop's size scale, from catalog.sizeScale (default letters)
 LETTER_NUMS = {}  # {"M": {30, 31}, …}: letters of every category -> sizes (to read «хочу M» before the product is known)
 DATA = {"catalog": None, "stock": None, "shop": None}  # the raw JSON values the products were built from
-ON_RELOAD = []  # callbacks run after a reload (fit.py re-reads its size tables, brain.py rebuilds its size patterns)
+ON_RELOAD = []  # callbacks run after a reload (facts.py rebuilds its size patterns)
 _state = {"revs": {}, "checked": 0.0, "online": False}
 
 
@@ -246,6 +251,11 @@ def refresh(every=30):
 
 
 _initial()
+
+
+def shop_name():
+    """The shop's name from shop.json (set at install: deploy.sh --shop-name), for the GPT prompt. None if not set."""
+    return ((DATA.get("shop") or {}).get("name") or "").strip() or None
 
 
 def product_for_item(title):

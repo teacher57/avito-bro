@@ -385,14 +385,15 @@ class App:
 
     # size by height and weight (how the bot picks most sizes)
     def hw_section(self, pid):
-        labels = store.size_labels()
+        all_labels = store.size_labels()
+        labels = {n: all_labels.get(n, str(n)) for n in store.product_sizes(pid)}  # only this product's sizes (HUB BRO)
         hw, prefilled = store.read_hw(pid), False
         if not hw:  # new product: start from another product's table
             for other in store.list_products():
                 if other["id"] != pid and other["hw"]:
                     hw, prefilled = other["hw"], True
                     break
-        hw = hw or {"heights": [0], "weights": [0], "cells": [[None]]}
+        hw = hw or {"heights": [170], "weights": [70], "cells": [[None]]}
         order = sorted(labels)
         W = 52  # cell width
 
@@ -463,13 +464,14 @@ class App:
         def check(e):
             try:
                 h, w = int(h_try.value), int(w_try.value)
-                hi = max(i for i, f in enumerate(hs) if int(f.value) <= h)
-                wi = max(j for j, f in enumerate(ws) if int(f.value) <= w)
+                near = lambda fs, v: min(range(len(fs)), key=lambda i: (abs(int(fs[i].value) - v), -int(fs[i].value)))
+                hi, wi = near(hs, h), near(ws, w)  # nearest height and weight, a tie goes to the bigger (as the bot does)
                 v = cells[hi][wi].value.strip()
-                result.value = (f"Бот ответит: {v} ({labels[int(v)]}) размер" if v.isdigit() and int(v) in labels
+                result.value = (f"Бот ответит: {labels[int(v)]} размер (рост {hs[hi].value}, вес {ws[wi].value})"
+                                if v.isdigit() and int(v) in labels
                                 else "Пустая клетка: бот не называет размер, чат уходит менеджеру")
             except ValueError:
-                result.value = "Введите рост и вес числами; рост/вес меньше первой строки/колонки — размера нет"
+                result.value = "Введите рост и вес числами (и в шапке таблицы тоже числа)"
             self.page.update()
 
         def save(e):
@@ -479,8 +481,9 @@ class App:
                 self.show_products(pid)
 
         grid = ft.Column(build(), spacing=4)
-        notes = [ui.hint("Числа в шапке — «от»: рост от … см (строки), вес от … кг (колонки); 0 — «меньше следующего». "
-                         "В клетке — номер размера " + f"{min(labels)}–{max(labels)}" + ". Пустая клетка — бот не называет "
+        notes = [ui.hint("Числа в шапке — рост, см (строки) и вес, кг (колонки). Бот берёт строку с ближайшим ростом и колонку "
+                         "с ближайшим весом (если ровно посередине — большую). В клетке — размер этого товара: "
+                         + ", ".join(map(str, labels)) + " (размеры задаются в HUB BRO). Пустая клетка — бот не называет "
                          "размер, а передаёт чат менеджеру."),
                  ui.hint("Если рост и вес явно не сходятся (например 180 см и 30 кг), бот тоже отдаёт чат менеджеру.")]
         if prefilled:
@@ -497,7 +500,8 @@ class App:
 
     # size table
     def table_section(self, pid):
-        labels = store.size_labels()
+        all_labels = store.size_labels()
+        labels = {n: all_labels.get(n, str(n)) for n in store.product_sizes(pid)}  # one row per size of this product (HUB BRO)
         cols, rows = store.read_table(pid)
         prefilled = False
         if not cols:  # new product: start from the columns another product already uses
@@ -555,7 +559,7 @@ class App:
         return section("Размерная сетка", *notes, ft.Row([grid], scroll=ft.ScrollMode.AUTO),
                        ft.Row([ft.Button(content="Добавить колонку", icon=ft.Icons.ADD, on_click=add_col),
                                ft.FilledButton(content="Сохранить сетку", icon=ft.Icons.SAVE, on_click=save)]),
-                       subtitle=f"Шкала размеров общая для всех джинсов ({min(labels)}–{max(labels)}).")
+                       subtitle="Строки — размеры этого товара из HUB BRO: " + ", ".join(map(str, labels)) + ".")
 
     # size chart picture
     def chart_section(self, pid, p):
@@ -769,8 +773,7 @@ class App:
                              "на других вкладках («Товары», «Отправка»); здесь — только где они стоят в тексте. "
                              "Под каждой — пример значения для выбранного товара."),
             ui.hint("Кроме этого текста GPT получает описания инструментов (фото, сетка, заказ, передать менеджеру, "
-                    "ничего не делать), а бот сам дописывает к ответу просьбу о росте и весе, если их ещё нет. "
-                    "Это меняется только в коде."),
+                    "ничего не делать). Это меняется только в коде."),
         ], spacing=16, scroll=ft.ScrollMode.AUTO, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
         self.page.update()
         load_examples()

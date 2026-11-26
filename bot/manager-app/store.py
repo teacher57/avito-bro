@@ -318,8 +318,8 @@ def norm_column(name):
 
 def save_table(pid, columns, rows):
     """columns: names; rows: [{size, <col>: value}] — label comes from the shop's size scale.
-    A size that the product didn't have yet is added to its sizes (the table = the sizes it comes in, as before)."""
-    labels = size_labels()
+    Only the product's own sizes (set in HUB BRO) may have a row: one size = one row."""
+    allowed = set(product_sizes(pid))
     columns = [norm_column(c) for c in columns if c.strip()]
     if len(set(columns)) != len(columns):
         raise ValueError("Две колонки с одинаковым названием")
@@ -328,8 +328,8 @@ def save_table(pid, columns, rows):
     out, seen = {}, set()
     for r in rows:
         size = int(r["size"])
-        if size not in labels:
-            raise ValueError(f"Размера {size} нет в шкале размеров")
+        if size not in allowed:
+            raise ValueError(f"Размера {size} нет у этого товара (размеры товара задаются в HUB BRO)")
         if size in seen:
             raise ValueError(f"Размер {size} указан дважды")
         seen.add(size)
@@ -351,7 +351,6 @@ def save_table(pid, columns, rows):
             return f"«{p.get('name')}»: размерная сетка удалена"
         old_titles = {c.get("key"): c.get("title") for c in ((p.get("sizeTable") or {}).get("columns") or [])}
         cols = [{"key": c, "title": old_titles.get(c) or HEAD.get(c) or c.replace("_", " ")} for c in columns]
-        p["sizes"] = _sort_sizes(list(p.get("sizes") or []) + list(out), cat)
         p["sizeTable"] = {"columns": cols, "rows": {s: out[s] for s in _sort_sizes(out, cat)}}
         return f"«{p.get('name')}»: размерная сетка"
     _edit_catalog(edit)
@@ -366,8 +365,10 @@ def read_hw(pid):
 
 
 def save_hw(pid, heights, weights, cells):
-    """heights/weights: band starts as typed (str); cells[i][j]: size number or "" (= no size, Maxim answers)."""
-    labels = size_labels()
+    """heights/weights: points as typed (str) — the bot takes the NEAREST height row and weight column (a tie goes to the
+    bigger one); cells[i][j]: size number or "" (= no size, the chat goes to the manager). Only the product's own sizes
+    (set in HUB BRO) are allowed in the cells."""
+    allowed = sorted(product_sizes(pid))
 
     def starts(values, what, lo, hi):
         out = []
@@ -380,15 +381,16 @@ def save_hw(pid, heights, weights, cells):
             raise ValueError(f"{what}: значения должны идти по возрастанию и не повторяться")
         return out
 
-    hs = starts(heights, "Рост", 0, 230)
-    ws = starts(weights, "Вес", 0, 250)
+    hs = starts(heights, "Рост", 100, 230)
+    ws = starts(weights, "Вес", 20, 250)
     grid = []
     for h, row in zip(hs, cells):
         vals = []
         for w, c in zip(ws, row):
             c = str(c).strip()
-            if c and (not c.isdigit() or int(c) not in labels):
-                raise ValueError(f"Рост от {h}, вес от {w}: «{c}» — нет такого размера (есть {min(labels)}–{max(labels)})")
+            if c and (not c.isdigit() or int(c) not in allowed):
+                raise ValueError(f"Рост {h}, вес {w}: «{c}» — такого размера нет у этого товара "
+                                 f"(есть: {', '.join(map(str, allowed))}; размеры товара задаются в HUB BRO)")
             vals.append(str(int(c)) if c else None)
         grid.append(vals + [None] * (len(ws) - len(vals)))
     grid += [[None] * len(ws) for _ in range(len(hs) - len(grid))]
