@@ -214,9 +214,10 @@ Start-ScheduledTask -TaskName HubBroTray
   rps "
 \$ErrorActionPreference = 'Stop'
 Set-Location '$DEST\\hub-bro\\web'
-\$log = & npm.cmd ci --no-audit --no-fund 2>&1
+# через cmd: предупреждения npm идут в stderr, а PowerShell 5.1 со Stop принял бы их за ошибку
+\$log = cmd.exe /c 'npm ci --no-audit --no-fund 2>&1'
 if (\$LASTEXITCODE) { \$log | Select-Object -Last 15; throw 'npm ci не прошёл' }
-\$log = & npm.cmd run build 2>&1
+\$log = cmd.exe /c 'npm run build 2>&1'
 if (\$LASTEXITCODE) { \$log | Select-Object -Last 15; throw 'сборка кабинета не прошла' }
 'кабинет собран'
 \$ext = '$EXT'
