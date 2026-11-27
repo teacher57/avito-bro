@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE / "brain"))
 import facts as _facts  # noqa: E402  (CLOCK_OFFSET: manager.py sets it after a clock check)
 from facts import cutoffs, extract, leg_answer, merged_nums, ships_today  # noqa: E402
 import products as _products  # noqa: E402
-from products import SIZE_LABEL, hw_size, next_photo, product_for_item, shop_name, table_lines  # noqa: E402
+from products import SIZE_LABEL, hw_outside, hw_size, next_photo, product_for_item, shop_name, table_lines  # noqa: E402
 
 MODEL = "gpt-5.4"
 PRICES = {  # $ per 1M tokens: input, cached input, output (reasoning tokens are billed as output)
@@ -201,6 +201,9 @@ def size_hint(prod, msgs):
         h, w = own.get("height"), own.get("weight")
     if not (h and w):
         return "нет (рост и вес покупатель ещё не написал)"
+    if prod and prod.get("hw") and hw_outside(prod["hw"], h, w):
+        return (f"рост {h}, вес {w} — за пределами таблицы размеров магазина: размер НЕ называй и не предлагай, "
+                "вызови escalate (менеджер подберёт сам)")
     n = hw_size(prod["hw"], h, w) if prod and prod.get("hw") else None
     if not n:
         return f"рост {h}, вес {w} → размер не определён, отдай менеджеру"
