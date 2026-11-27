@@ -372,6 +372,15 @@ def go_ahead_once(reply, earlier):
 ANY_SIZE = re.compile(r"(?<![\d.,])([2-5]\d)(?![\d.,]|\s*(?:см|кг|₽|руб|р\b|лет|года|год|%))", re.I)
 
 
+def any_sizes(text):
+    """Jeans sizes anywhere in a text: two-digit numbers (not prices, heights, ages…) that fall within the shop's size
+    scale (its smallest to its biggest size, e.g. 25–36). Anything outside is not a jeans size — e.g. a Russian
+    clothing size «50–52» (2026-11-27: «близко к 50–52» got «Но этого размера сейчас нет в наличии» appended)."""
+    scale = [n for n in SIZE_LABEL if isinstance(n, int)]
+    lo, hi = (min(scale), max(scale)) if scale else (20, 59)
+    return [n for n in (int(x) for x in ANY_SIZE.findall(text or "")) if lo <= n <= hi]
+
+
 def _sizes_ru(sizes):
     """[30] -> «30 размера», [30, 31] -> «30 и 31 размеров»."""
     s = [str(x) for x in sizes]
@@ -391,13 +400,13 @@ def size_guard(out, model, text, context=""):
     if have is not None:
         # any two-digit size outside the in-stock list counts as not available — also one this model doesn't have
         # at all (GPT once confirmed «29 есть» for a model with 23–25 only, 2026-11-25)
-        gone |= {n for n in (int(x) for x in ANY_SIZE.findall(text)) if n not in have} if order_q else set()
-        gone |= {n for n in (int(x) for x in ANY_SIZE.findall(reply)) if n not in have}
+        gone |= {n for n in any_sizes(text) if n not in have} if order_q else set()
+        gone |= {n for n in any_sizes(reply) if n not in have}
     if not gone:
         return out
     recommended = ({int(a or b) for a, b in REPLY_SIZE.findall(reply)} |
-                   ({int(x) for x in ANY_SIZE.findall(reply)} if have is not None else set())) & gone
-    named = (set(sizes_in(text)) | ({int(x) for x in ANY_SIZE.findall(text)} if have is not None else set())) or \
+                   (set(any_sizes(reply)) if have is not None else set())) & gone
+    named = (set(sizes_in(text)) | (set(any_sizes(text)) if have is not None else set())) or \
         ({stated_size(context)} - {None} if is_decided(text) or closes_deal(text, context) else set())
     asked = (named & gone) if order_q else set()  # «есть 30?», «беру 30», or «беру» right after the shop named a missing size
     why = lambda w: (out.get("why", "") + "; " + w).lstrip("; ")
@@ -407,7 +416,7 @@ def size_guard(out, model, text, context=""):
         # «временно» — только для размеров самой модели; размера, которого у модели нет вовсе, просто «нет»
         never = have is not None and all(n not in (BY_KEY.get(model) or {}).get("sizes", []) for n in bad)
         when = "сейчас нет" if never else "сейчас временно нет"
-        if have is not None and asked and {int(x) for x in ANY_SIZE.findall(reply)} & set(bad):
+        if have is not None and asked and set(any_sizes(reply)) & set(bad):
             rest = ""  # GPT confirmed a size that isn't there («Да, 29 есть») — the whole reply goes, not just a note
         if asked or not rest:
             note = f"К сожалению, {_sizes_ru(bad)} {when} в наличии."
