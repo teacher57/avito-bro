@@ -26,9 +26,23 @@ def nearest(points, value):
     return min(range(len(points)), key=lambda i: (abs(points[i] - value), -points[i]), default=None)
 
 
+HW_MARGIN_CM, HW_MARGIN_KG = 5, 5  # beyond the table's header by more than this -> no size, the manager answers (user, 27.11)
+
+
+def hw_outside(hw, height, weight):
+    """True when the height or the weight is further than HW_MARGIN_CM / HW_MARGIN_KG beyond the table's smallest or
+    biggest header value (e.g. 200 cm / 130 kg for a table up to 183 cm / 87 kg): the table can't say, the manager does."""
+    hs, ws = hw["heights"], hw["weights"]
+    return (not hs or not ws or not min(hs) - HW_MARGIN_CM <= height <= max(hs) + HW_MARGIN_CM
+            or not min(ws) - HW_MARGIN_KG <= weight <= max(ws) + HW_MARGIN_KG)
+
+
 def hw_size(hw, height, weight):
     """Size number from the manager app's height x weight table: the row of the nearest height and the column of the
-    nearest weight (a tie goes to the bigger one). None = empty cell (the bot doesn't name a size)."""
+    nearest weight (a tie goes to the bigger one). None = empty cell, or the buyer is outside the table by more than
+    the margin (hw_outside) -> the bot doesn't name a size."""
+    if hw_outside(hw, height, weight):
+        return None
     hi, wi = nearest(hw["heights"], height), nearest(hw["weights"], weight)
     return None if hi is None or wi is None else hw["cells"][hi][wi]
 

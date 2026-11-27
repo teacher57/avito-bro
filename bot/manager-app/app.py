@@ -465,6 +465,12 @@ class App:
             try:
                 h, w = int(h_try.value), int(w_try.value)
                 near = lambda fs, v: min(range(len(fs)), key=lambda i: (abs(int(fs[i].value) - v), -int(fs[i].value)))
+                H, Wt = [int(f.value) for f in hs], [int(f.value) for f in ws]
+                if not (min(H) - 5 <= h <= max(H) + 5 and min(Wt) - 5 <= w <= max(Wt) + 5):  # as the bot: ±5 cm / ±5 kg
+                    result.value = (f"Вне таблицы (рост {min(H)}–{max(H)} ± 5 см, вес {min(Wt)}–{max(Wt)} ± 5 кг): "
+                                    "бот не называет размер, чат уходит менеджеру")
+                    self.page.update()
+                    return
                 hi, wi = near(hs, h), near(ws, w)  # nearest height and weight, a tie goes to the bigger (as the bot does)
                 v = cells[hi][wi].value.strip()
                 result.value = (f"Бот ответит: {labels[int(v)]} размер (рост {hs[hi].value}, вес {ws[wi].value})"
@@ -482,7 +488,8 @@ class App:
 
         grid = ft.Column(build(), spacing=4)
         notes = [ui.hint("Числа в шапке — рост, см (строки) и вес, кг (колонки). Бот берёт строку с ближайшим ростом и колонку "
-                         "с ближайшим весом (если ровно посередине — большую). В клетке — размер этого товара: "
+                         "с ближайшим весом (если ровно посередине — большую). Рост или вес дальше 5 см / 5 кг за крайними числами шапки — "
+                         "бот размер не называет, чат уходит менеджеру. В клетке — размер этого товара: "
                          + ", ".join(map(str, labels)) + " (размеры задаются в HUB BRO). Пустая клетка — бот не называет "
                          "размер, а передаёт чат менеджеру."),
                  ui.hint("Если рост и вес явно не сходятся (например 180 см и 30 кг), бот тоже отдаёт чат менеджеру.")]
