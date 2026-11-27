@@ -23,7 +23,7 @@ import requests
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE / "brain"))
 import facts as _facts  # noqa: E402  (CLOCK_OFFSET: manager.py sets it after a clock check)
-from facts import cutoffs, extract, leg_answer, merged_nums, ships_today  # noqa: E402
+from facts import ASK_BODY, cutoffs, extract, leg_answer, merged_nums, ships_today  # noqa: E402
 import products as _products  # noqa: E402
 from products import SIZE_LABEL, hw_outside, hw_size, next_photo, product_for_item, shop_name, table_lines  # noqa: E402
 
@@ -97,6 +97,7 @@ PROMPT = """Ты — {shop}, переписываешься с покупате�
   («Здравствуйте!» на официальное, «Привет!» на «привет», «здарова» и т.п.).
 - Не задавай лишних вопросов. Рост и вес проси, если покупатель спрашивает, какой размер ему подойдёт, или про посадку,
   а роста и веса в переписке ещё нет (только недостающее: известен рост — спроси вес). Если уже просил — не повторяй.
+  В остальных ответах сам не проси: если рост и вес ещё неизвестны, просьба один раз добавится к твоему ответу сама.
 - Не говори, что ты бот или ИИ.
 - Не заканчивай ответ фразами вроде «Если остались вопросы, пишите» — такое напоминание магазин отправляет сам, один раз.
 
@@ -190,15 +191,41 @@ def table_text(prod):
     return "\n".join("  " + r for r in table_lines(prod["table"], prod.get("labels") or SIZE_LABEL))
 
 
+def known_hw(msgs):
+    """(height, weight) the buyer gave anywhere in the chat; None for what's not known."""
+    buyer = "\n".join(m["text"] or "" for m in msgs if m["who"] == "buyer")
+    nums = merged_nums(buyer.split("\n")[-1] if buyer else "", buyer)
+    own = extract(buyer)
+    for got in (nums, own):
+        if got.get("height") and got.get("weight"):
+            return got["height"], got["weight"]
+    return nums.get("height") or own.get("height"), nums.get("weight") or own.get("weight")
+
+
+def with_hw_ask(reply, msgs, prod):
+    """Add «Напишите свой рост и вес…» after the answer (or only the missing one: «…ваш вес…» when height is known),
+    once per chat: only if the buyer hasn't given height and weight, nobody from the shop already asked for whatever's
+    still missing (just «а вес какой?» counts when height is known), the item is in stock and not ordered yet."""
+    if prod and not prod.get("in_stock", True):
+        return reply
+    h, w = known_hw(msgs)
+    if h and w:
+        return reply
+    if any(m["who"] == "system" and "новый заказ" in (m["text"] or "").lower() for m in msgs):
+        return reply
+    missing = [word for word, have in (("рост", h), ("вес", w)) if not have]
+    # «рост», «роста», «вес», «весе»… but not «весь» / «ростовка»
+    asked = lambda t: all(re.search(r"\b" + word + r"(а|е|у|ом)?\b", (t or "").lower()) for word in missing)
+    if asked(reply) or any(m["who"] in ("bot", "shop") and asked(m["text"]) for m in msgs):
+        return reply
+    ask = ASK_BODY if len(missing) == 2 else f"Напишите, пожалуйста, ваш {missing[0]}, я вам помогу подобрать размер"
+    return f"{reply}\n\n{ask}" if reply else ask
+
+
 def size_hint(prod, msgs):
     """Size from the manager app's height x weight table (nearest height and weight), if the buyer gave both anywhere
     in the chat."""
-    buyer = "\n".join(m["text"] for m in msgs if m["who"] == "buyer")
-    nums = merged_nums(buyer.split("\n")[-1] if buyer else "", buyer)
-    h, w = nums.get("height"), nums.get("weight")
-    if not (h and w):
-        own = extract(buyer)
-        h, w = own.get("height"), own.get("weight")
+    h, w = known_hw(msgs)
     if not (h and w):
         return "нет (рост и вес покупатель ещё не написал)"
     if prod and prod.get("hw") and hw_outside(prod["hw"], h, w):
@@ -490,6 +517,8 @@ def answer(title, price, msgs, now=None, model=None):
         if text and all(c["function"]["name"] != "order_placed" for c in calls):
             break  # text is ready and only pictures were added; after order_placed the model writes the text again
     esc = HANDOFF in text
+    if not esc and ordered is None and (text or photos):
+        text = with_hw_ask(text, msgs, prod)
     out = {"reply": None if esc else text, "photos": [] if esc else photos, "escalate": esc,
            "cost_usd": total, "tokens": toks}
     if ordered is not None:  # order_placed was called; "" = no size in the chat
