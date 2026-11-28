@@ -60,6 +60,16 @@ def send_photos(chat_id, paths, caption=None):
         return json.loads(r.read())
 
 
+def send_document(chat_id, path, caption=None):
+    """A file (sendDocument), e.g. the test chats export. Nothing when ENABLED is False."""
+    if not ENABLED:
+        return None
+    body, ct = _multipart({"chat_id": str(chat_id), **({"caption": caption} if caption else {})}, {"document": Path(path)})
+    req = urllib.request.Request(BASE + "sendDocument", data=body, headers={"Content-Type": ct})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())
+
+
 REMOVE_KEYBOARD = "remove"  # keyboard=REMOVE_KEYBOARD hides the reply keyboard (access taken away)
 
 

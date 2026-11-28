@@ -17,6 +17,8 @@ in the manager app (live/app_control.json). Telegram (polling, notifications, te
 Roles (live/roles.json): admin = everything above + chat viewer + «👥 Пользователи» (change roles, take them away);
 manager = handoff notifications; tester = only the test chat (always in test mode, no notifications at all).
 All of them have a test sandbox: they write as a buyer, the bot answers as it would on Avito; «Сброс» clears it.
+Every test chat is kept: «Сброс» / taking the rights away moves it to live/test_chats/; «📥 Тестовые чаты» (admin) sends
+all of them, finished and current, as one text file.
 
 Run:  run_manager.cmd  or  python manager.py   (needs AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, TG_BOT_TOKEN: from the
       environment, e.g. the manager app's tokens via run_manager.cmd, else from avito-bot/.env lines NAME=value).
@@ -87,6 +89,7 @@ LIVE = HERE / "live"
 LIVE.mkdir(exist_ok=True)
 STATE = LIVE / "state.json"
 ROLES = LIVE / "roles.json"
+TEST_CHATS = LIVE / "test_chats"  # every finished test chat (♻️ Сброс, rights taken away): one JSON each, kept forever
 LOG = LIVE / "manager.log"
 e = html.escape
 NO_ACCESS = "Нет доступа. Попросите администратора добавить вас."
@@ -836,6 +839,60 @@ ORDER_BTN = "🛒 Заказ оформлен"
 MONTHS_RU = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 
 
+def archive_sandbox(uid, why, user=None):
+    """Keep a finished test chat: live/test_chats/<tg id>_<MSK date-time>.json (who, role, product, all messages).
+    Called before «♻️ Сброс» clears it and before the rights are taken away. Empty chats are not kept."""
+    sb = state["sandbox"].get(str(uid))
+    if not sb or not sb.get("msgs"):
+        return None
+    u = user or roles["users"].get(str(uid)) or {}
+    now = int(time.time())
+    TEST_CHATS.mkdir(exist_ok=True)
+    stem = f"{uid}_{time.strftime('%Y-%m-%d_%H-%M-%S', time.gmtime(now + 3 * 3600))}"
+    path, n = TEST_CHATS / f"{stem}.json", 1
+    while path.exists():  # two chats of one person in the same second: keep both
+        n += 1
+        path = TEST_CHATS / f"{stem}_{n}.json"
+    save(path, {"tg_id": str(uid), "name": u.get("name"), "username": u.get("username"), "role": u.get("role"),
+                "product": sandbox_conv(sb)["title"], "started": sb["msgs"][0]["t"], "ended": now, "why": why,
+                "order_no": sb.get("order_no"), "escalated": sb.get("escalated"), "msgs": sb["msgs"]})
+    log("test chat archived", uid, path.name, len(sb["msgs"]))
+    return path
+
+
+def test_chat_text(c, current=False):
+    icon = {"buyer": "👤", "shop": "🏪", "system": "⚙️", "bot": "🤖"}
+    who = f"{c.get('name') or ''} @{c.get('username') or '—'} (id {c['tg_id']}, {ROLE_RU.get(c.get('role'), c.get('role') or '—')})"
+    head = (f"=== {who}\nТовар: {c.get('product')} · {msk(c['started'])} – "
+            + ("сейчас (чат ещё идёт)" if current else f"{msk(c['ended'])} ({c.get('why')})")
+            + (f"\nПередан менеджеру: {c['escalated']}" if c.get("escalated") else ""))
+    lines = [head]
+    for m in c["msgs"]:
+        ph = f" [+{len(m['photos'])} фото]" if m.get("photos") else ""
+        lines.append(f"{msk(m['t'])} {icon.get(m['who'], '•')} {m.get('text') or ''}{ph}")
+    return "\n".join(lines)
+
+
+def export_test_chats():
+    """All test chats as one text file (finished ones from live/test_chats/, then the current ones) -> (path, count)."""
+    chats = []
+    for f in sorted(TEST_CHATS.glob("*.json")) if TEST_CHATS.exists() else []:
+        c = load(f, None)
+        if c and c.get("msgs"):
+            chats.append((c, False))
+    for uid, sb in state["sandbox"].items():
+        if sb.get("msgs"):
+            u = roles["users"].get(uid) or {}
+            chats.append(({"tg_id": uid, "name": u.get("name"), "username": u.get("username"), "role": u.get("role"),
+                           "product": sandbox_conv(sb)["title"], "started": sb["msgs"][0]["t"],
+                           "escalated": sb.get("escalated"), "msgs": sb["msgs"]}, True))
+    chats.sort(key=lambda x: x[0]["started"])
+    path = LIVE / f"test_chats_{time.strftime('%Y-%m-%d', time.gmtime(time.time() + 3 * 3600))}.txt"
+    path.write_text(f"Тестовые чаты: {len(chats)} (время по Москве)\n\n" + "\n\n".join(test_chat_text(c, cur) for c, cur in chats)
+                    + "\n", encoding="utf-8")
+    return path, len(chats)
+
+
 def sandbox_conv(sb):
     title = next((p["name"] for p in PRODUCTS if p["key"] == sb["model"]), "тестовый чат")
     return {"title": title, "price": "", "msgs": sb["msgs"]}
@@ -892,7 +949,9 @@ def sandbox_order(uid, sb):
 # ---------------------------------------------------------------- Telegram side
 KEY_BTN = "💰 Ключ OpenAI"
 USERS_BTN = "👥 Пользователи"
-MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN, USERS_BTN]], "manager": [["🧪 Тест"]]}
+EXPORT_BTN = "📥 Тестовые чаты"
+MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN], [USERS_BTN, EXPORT_BTN]],
+        "manager": [["🧪 Тест"]]}
 ROLE_RU = {"admin": "админ", "manager": "менеджер", "tester": "тестировщик"}
 # tester (user, 28.11): always in the test chat, gets no notifications (every notification goes to admins / managers only)
 TESTER_HELP = ("🧪 Вы <b>тестировщик</b>: пишите как покупатель на Авито — бот ответит так же, как ответил бы клиенту. "
@@ -1040,6 +1099,7 @@ def on_message(msg):
         return
     if u.get("mode") == "test" or u["role"] == "tester":
         if text == "♻️ Сброс":
+            archive_sandbox(uid, "сброс")
             model = sandbox(uid)["model"]
             state["sandbox"][str(uid)] = {"model": model, "msgs": [], "answered_upto": 0}
             save(STATE, state)
@@ -1069,6 +1129,13 @@ def on_message(msg):
         if text:
             sb["msgs"].append({"t": int(time.time()), "who": "buyer", "text": text})
             save(STATE, state)
+        return
+    if u["role"] == "admin" and text == EXPORT_BTN:
+        path, n = export_test_chats()
+        if not n:
+            tg.send(uid, "Тестовых чатов пока нет.")
+        else:
+            tg.send_document(uid, path, caption=f"📥 Тестовые чаты: {n} (законченные и текущие, время по Москве)")
         return
     if u["role"] == "admin" and text == USERS_BTN:
         t, rows = users_panel()
@@ -1179,6 +1246,7 @@ def on_callback(cb):
             roles["users"].pop(target, None)
             roles.setdefault("blocked", {})[target] = {k: p.get(k) for k in ("username", "name")}
             if old:
+                archive_sandbox(target, "права отобраны", old)
                 state["sandbox"].pop(target, None)
                 save(STATE, state)
                 tg.send(int(target), "Ваш доступ к боту отозван.", keyboard=tg.REMOVE_KEYBOARD)
