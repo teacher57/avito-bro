@@ -14,8 +14,9 @@ in the manager app (live/app_control.json). Telegram (polling, notifications, te
   * Every new chat created while live mode is on is the bot's (assigned); chats from before are never touched.
   * After a handoff to the manager the bot stops reading that chat.
 
-Roles (live/roles.json): admin = everything above + chat viewer; manager = handoff notifications.
-Both have a test sandbox: they write as a buyer, the bot answers as it would on Avito; «Сброс» clears it.
+Roles (live/roles.json): admin = everything above + chat viewer + «👥 Пользователи» (change roles, take them away);
+manager = handoff notifications; tester = only the test chat (always in test mode, no notifications at all).
+All of them have a test sandbox: they write as a buyer, the bot answers as it would on Avito; «Сброс» clears it.
 
 Run:  run_manager.cmd  or  python manager.py   (needs AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, TG_BOT_TOKEN: from the
       environment, e.g. the manager app's tokens via run_manager.cmd, else from avito-bot/.env lines NAME=value).
@@ -890,7 +891,13 @@ def sandbox_order(uid, sb):
 
 # ---------------------------------------------------------------- Telegram side
 KEY_BTN = "💰 Ключ OpenAI"
-MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN]], "manager": [["🧪 Тест"]]}
+USERS_BTN = "👥 Пользователи"
+MENU = {"admin": [["📋 Чаты", "🧪 Тест"], ["ℹ️ Статус", "⏸ Пауза", "▶️ Старт"], [KEY_BTN, USERS_BTN]], "manager": [["🧪 Тест"]]}
+ROLE_RU = {"admin": "админ", "manager": "менеджер", "tester": "тестировщик"}
+# tester (user, 28.11): always in the test chat, gets no notifications (every notification goes to admins / managers only)
+TESTER_HELP = ("🧪 Вы <b>тестировщик</b>: пишите как покупатель на Авито — бот ответит так же, как ответил бы клиенту. "
+               "«🛒 Заказ оформлен» — как будто покупатель оформил заказ. «♻️ Сброс» — начать чат заново, «👖 Товар» — "
+               "выбрать товар. Настоящим покупателям ничего не уходит, уведомления магазина вам не приходят.")
 INSTANT_ON, INSTANT_OFF = "⚡ Отвечает сразу", "⏱ Отвечает как клиентам"
 # who answers in the test chat (live chats always use the rules); the button shows the current one, a tap moves to the next
 
@@ -900,9 +907,13 @@ def instant(uid):
     return bool(roles["users"].get(str(uid), {}).get("instant"))
 
 
+def is_tester(uid):
+    return roles["users"].get(str(uid), {}).get("role") == "tester"
+
+
 def test_menu(uid):
     return [["♻️ Сброс", "👖 Товар"], [INSTANT_ON if instant(uid) else INSTANT_OFF],
-            [ORDER_BTN], ["⬅️ Выйти из теста"]]
+            [ORDER_BTN]] + ([] if is_tester(uid) else [["⬅️ Выйти из теста"]])
 
 
 FEED_ON, FEED_OFF = "🔔 Чаты менеджера: вкл", "🔕 Чаты менеджера: выкл"
@@ -910,7 +921,7 @@ FEED_ON, FEED_OFF = "🔔 Чаты менеджера: вкл", "🔕 Чаты �
 
 def keyboard(uid):
     u = roles["users"][str(uid)]
-    if u.get("mode") == "test":
+    if u.get("mode") == "test" or u["role"] == "tester":
         return test_menu(uid)
     if u["role"] == "admin":
         return MENU["admin"] + [[FEED_ON if u.get("mgr_feed", True) else FEED_OFF]]
@@ -957,6 +968,30 @@ def transcript(cid):
     return "\n".join(lines)
 
 
+def user_label(k, u):
+    return f"{u.get('name') or ''} @{u.get('username') or '—'}".strip()
+
+
+def users_panel():
+    """«👥 Пользователи»: everyone with a role (tap -> change it / take it away) and those still waiting for one."""
+    rows = []
+    for k, u in sorted(roles["users"].items(), key=lambda kv: (["admin", "manager", "tester"].index(kv[1]["role"])
+                                                                 if kv[1]["role"] in ROLE_RU else 9, kv[0])):
+        owner = " 👑" if k == roles.get("owner") else ""
+        rows.append([(f"{ROLE_RU.get(u['role'], u['role'])}{owner} · {user_label(k, u)}"[:60], f"user:{k}")])
+    for k, p in roles["pending"].items():
+        rows.append([(f"⏳ ждёт роли · {user_label(k, p)}"[:60], f"user:{k}")])
+    text = (f"👥 <b>Пользователи: {len(roles['users'])}</b>" + (f", ждут роли: {len(roles['pending'])}" if roles["pending"] else "")
+            + "\nНажмите на человека, чтобы поменять роль или отобрать права.")
+    return text, rows
+
+
+def role_buttons(target, keep_current=None):
+    rows = [[(ROLE_RU[r].capitalize(), f"role:{target}:{r}") for r in ("manager", "tester", "admin") if r != keep_current]]
+    rows.append([("🚫 Отобрать права" if keep_current else "Нет", f"role:{target}:none")])
+    return rows
+
+
 def on_message(msg):
     frm, text = msg.get("from") or {}, (msg.get("text") or "").strip()
     uid = frm.get("id")
@@ -978,12 +1013,16 @@ def on_message(msg):
             save(ROLES, roles)
             who = f"{e(frm.get('first_name') or '')} @{e(frm.get('username') or '—')} (id {uid})"
             for a in ids_with("admin"):
-                tg.send(a, f"👋 Боту написал {who}: «{e(text[:100])}». Какую роль дать?",
-                        buttons=[[("Менеджер", f"role:{uid}:manager"), ("Админ", f"role:{uid}:admin"), ("Нет", f"role:{uid}:none")]])
+                tg.send(a, f"👋 Боту написал {who}: «{e(text[:100])}». Какую роль дать?\n"
+                           "<i>Тестировщик: только тестовый чат с ботом (пишет как покупатель, может оформить тестовый "
+                           "заказ), никаких уведомлений.</i>", buttons=role_buttons(uid))
         return
     if text in ("/start", "/menu"):
-        tg.send(uid, f"Здравствуйте, {e(u.get('name') or '')}! Ваша роль: <b>{'админ' if u['role'] == 'admin' else 'менеджер'}</b>.",
+        tg.send(uid, f"Здравствуйте, {e(u.get('name') or '')}! Ваша роль: <b>{ROLE_RU.get(u['role'], u['role'])}</b>.",
                 keyboard=keyboard(uid))
+        if u["role"] == "tester":
+            tg.send(uid, TESTER_HELP)
+            tg.send(uid, "Какой товар открыт у «покупателя»?", buttons=product_buttons())
         return
     if text == "🧪 Тест":
         u["mode"] = "test"; save(ROLES, roles)
@@ -992,11 +1031,14 @@ def on_message(msg):
                      + "). Ничего никуда не отправляется. Кнопка «⚡/⏱» переключает задержку.", keyboard=keyboard(uid))
         tg.send(uid, "Какой товар открыт у «покупателя»?", buttons=product_buttons())
         return
+    if text == "⬅️ Выйти из теста" and u["role"] == "tester":
+        tg.send(uid, "🧪 Тестировщик всегда в режиме теста.", keyboard=keyboard(uid))
+        return
     if text == "⬅️ Выйти из теста":
         u["mode"] = "normal"; save(ROLES, roles)
         tg.send(uid, "Вы вышли из режима теста. Тестовый чат сохранён до сброса.", keyboard=keyboard(uid))
         return
-    if u.get("mode") == "test":
+    if u.get("mode") == "test" or u["role"] == "tester":
         if text == "♻️ Сброс":
             model = sandbox(uid)["model"]
             state["sandbox"][str(uid)] = {"model": model, "msgs": [], "answered_upto": 0}
@@ -1028,6 +1070,10 @@ def on_message(msg):
             sb["msgs"].append({"t": int(time.time()), "who": "buyer", "text": text})
             save(STATE, state)
         return
+    if u["role"] == "admin" and text == USERS_BTN:
+        t, rows = users_panel()
+        tg.send(uid, t, buttons=rows or None)
+        return
     if u["role"] == "admin" and text == "📋 Чаты":
         rows, n = chats_page(0, "all")
         tg.send(uid, f"Записанные чаты: {n}" + ("" if n else " (новых диалогов пока не было)"), buttons=rows or None)
@@ -1058,7 +1104,8 @@ def on_message(msg):
                      f"Режим: <b>{mode}</b>\n"
                      + ("" if lic.ok() else f"⛔ Лицензия: {e(lic.reason_ru())}\n") +
                      f"Новых чатов: {len(state['chats'])} · чатов бота: {sum(c['assigned'] for c in cs)} · у менеджера: {sum(bool(c.get('escalated')) for c in cs)}\n"
-                     f"Менеджеры: {', '.join(roles['users'][str(i)].get('name') or str(i) for i in ids_with('manager')) or 'нет'}")
+                     f"Менеджеры: {', '.join(roles['users'][str(i)].get('name') or str(i) for i in ids_with('manager')) or 'нет'}\n"
+                     f"Тестировщики: {', '.join(roles['users'][str(i)].get('name') or str(i) for i in ids_with('tester')) or 'нет'}")
         return
     tg.send(uid, "Выберите действие в меню.", keyboard=keyboard(uid))
 
@@ -1101,18 +1148,45 @@ def on_callback(cb):
         rows, n = chats_page(int(page), flt)
         label = "Чаты бота" if flt == "bot" else "Записанные чаты"
         tg.send(uid, f"{label}: {n}" + ("" if n else " (нет таких чатов)"), buttons=rows)
+    elif data.startswith("user:") and u["role"] == "admin":
+        target = data[5:]
+        who = roles["users"].get(target) or roles["pending"].get(target)
+        if who is None:
+            tg.send(uid, "Такого пользователя уже нет.")
+        elif target == roles.get("owner"):
+            tg.send(uid, f"👑 {e(user_label(target, who))} — владелец бота (написал первым): его роль не меняется.")
+        else:
+            cur = roles["users"].get(target, {}).get("role")
+            tg.send(uid, f"{e(user_label(target, who))} (id {target}): "
+                         + (f"<b>{ROLE_RU.get(cur, cur)}</b>" if cur else "ждёт роли") + ". Что сделать?",
+                    buttons=role_buttons(target, cur))
     elif data.startswith("role:") and u["role"] == "admin":
         _, target, role = data.split(":")
-        p = roles["pending"].pop(target, {})
+        old = roles["users"].get(target)
+        p = roles["pending"].pop(target, None) or old or {}
         if target == roles.get("owner"):
-            pass  # the owner's (first admin's) role never changes
-        elif role in ("manager", "admin"):
-            roles["users"][target] = {"role": role, "username": p.get("username"), "name": p.get("name"), "mode": "normal"}
-            tg.send(int(target), f"Вам выдана роль: <b>{'менеджер' if role == 'manager' else 'админ'}</b>.", keyboard=MENU[role])
-            tg.send(uid, f"Готово: {e(p.get('name') or target)} теперь {'менеджер' if role == 'manager' else 'админ'}.")
+            tg.send(uid, "Роль владельца бота (того, кто написал первым) не меняется.")
+        elif role in ROLE_RU:
+            roles["users"][target] = {"role": role, "username": p.get("username"), "name": p.get("name"),
+                                      "mode": "test" if role == "tester" else "normal"}
+            tg.send(int(target), f"Вам выдана роль: <b>{ROLE_RU[role]}</b>.", keyboard=keyboard(int(target)))
+            if role == "tester":
+                tg.send(int(target), TESTER_HELP)
+                tg.send(int(target), "Какой товар открыт у «покупателя»?", buttons=product_buttons())
+            tg.send(uid, f"Готово: {e(p.get('name') or target)} теперь {ROLE_RU[role]}.")
+            log("role", target, role, "by", uid)
         else:
-            roles.setdefault("blocked", {})[target] = p
-            tg.send(uid, "Ок, доступа не будет.")
+            roles["users"].pop(target, None)
+            roles.setdefault("blocked", {})[target] = {k: p.get(k) for k in ("username", "name")}
+            if old:
+                state["sandbox"].pop(target, None)
+                save(STATE, state)
+                tg.send(int(target), "Ваш доступ к боту отозван.", keyboard=tg.REMOVE_KEYBOARD)
+                tg.send(uid, f"🚫 {e(p.get('name') or target)}: права отобраны. Если напишет боту снова — вы снова "
+                             "увидите вопрос, какую роль дать.")
+                log("role removed", target, "by", uid)
+            else:
+                tg.send(uid, "Ок, доступа не будет.")
         save(ROLES, roles)
 
 

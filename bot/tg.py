@@ -60,6 +60,9 @@ def send_photos(chat_id, paths, caption=None):
         return json.loads(r.read())
 
 
+REMOVE_KEYBOARD = "remove"  # keyboard=REMOVE_KEYBOARD hides the reply keyboard (access taken away)
+
+
 def send(chat_id, text, buttons=None, keyboard=None):
     """HTML text. buttons = [[(label, callback_data)]] inline; keyboard = [[label]] reply keyboard. Nothing when ENABLED is False."""
     if not ENABLED:
@@ -67,6 +70,8 @@ def send(chat_id, text, buttons=None, keyboard=None):
     markup = None
     if buttons:
         markup = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
+    elif keyboard is REMOVE_KEYBOARD:
+        markup = {"remove_keyboard": True}
     elif keyboard:
         markup = {"keyboard": [[{"text": t} for t in row] for row in keyboard], "resize_keyboard": True}
     chunks, cur = [], ""
